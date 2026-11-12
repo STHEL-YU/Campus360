@@ -24,7 +24,7 @@ export default function NewsAnnouncements() {
   const [content, setContent] = useState("");
   const [selectedId, setSelectedId] = useState(null);
 
-  // Edit / delete state
+  // Edit / delete 
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -72,7 +72,7 @@ export default function NewsAnnouncements() {
   const labelClass =
     "text-[11px] font-bold uppercase tracking-wider text-slate-500";
 
-  // ---------- Filters ----------
+  // Filters 
   const hasActiveFilters =
     searchTerm ||
     audienceFilter !== "All" ||
@@ -116,7 +116,7 @@ export default function NewsAnnouncements() {
     );
   });
 
-  // ---------- Create ----------
+  // Create 
   const resetForm = () => {
     setTitle("");
     setType("Announcement");
@@ -145,7 +145,7 @@ export default function NewsAnnouncements() {
         day: "numeric",
         year: "numeric",
       }),
-      publishedAt: now.toLocaleDateString("en-CA"), // local YYYY-MM-DD
+      publishedAt: now.toLocaleDateString("en-CA"), 
     };
 
     setPublishedContent([newItem, ...publishedContent]);
@@ -153,7 +153,7 @@ export default function NewsAnnouncements() {
     closeModal();
   };
 
-  // ---------- Update ----------
+  // Update
   const openEdit = (item) => {
     setEditForm({ ...item });
     setIsEditOpen(true);
@@ -186,7 +186,7 @@ export default function NewsAnnouncements() {
     closeEdit();
   };
 
-  // ---------- Delete ----------
+  // Delete 
   const openDelete = (id) => {
     setDeleteTargetId(id);
     setIsDeleteOpen(true);
@@ -209,7 +209,7 @@ export default function NewsAnnouncements() {
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none font-sans">
       {/* Page Content Body */}
       <div className="p-8 flex flex-col gap-6 max-w-[1600px] w-full mx-auto">
-        {/* Title Header, Filters & Create Button */}
+    
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-col gap-1">
             <span className="text-[11px] font-bold tracking-wider uppercase text-blue-600">
@@ -257,9 +257,9 @@ s
           </div>
         </div>
 
-        {/* Two-column layout: List (left) | Details (right) */}
+        {/*  List (left) | Details (right) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left Side: Published Content List */}
+          {/* Published Content List */}
           <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs">
             <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
               <div>
@@ -349,7 +349,7 @@ s
             </div>
           </div>
 
-          {/* Right Side: Announcement Details */}
+          {/* Announcement Details */}
           <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs min-h-[320px]">
             {selectedItem ? (
               <div className="flex flex-col gap-5">

@@ -18,8 +18,6 @@ import {
   Hash,
 } from "lucide-react";
 
-// Sample report photos (generated placeholders).
-// Replace the `image` value on each report with a real photo URL from your backend.
 const placeholderImage = (label, from, to) =>
   `data:image/svg+xml;utf8,${encodeURIComponent(
     `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='360'>` +
@@ -122,18 +120,15 @@ export default function CampusMonitoring() {
     },
   ]);
 
-  const [statusFilter, setStatusFilter] = useState(null); // null = today's new reports | All | Pending | New | Resolved
+  const [statusFilter, setStatusFilter] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedId, setSelectedId] = useState(null); // report shown in details modal
-  const [confirm, setConfirm] = useState(null); // { type: 'decline' | 'delete', id }
+  const [selectedId, setSelectedId] = useState(null); 
+  const [confirm, setConfirm] = useState(null); 
 
-  // ---------- Derived data ----------
+  // Derived data
   const countBy = (status) => reports.filter((r) => r.status === status).length;
 
   const query = searchTerm.trim().toLowerCase();
-
-  // Default view shows new reports. Searching with no card selected looks
-  // through every status so pending / resolved reports can still be found.
   const activeStatus = statusFilter ?? (query ? "All" : "New");
 
   const visibleReports = reports
@@ -159,7 +154,7 @@ export default function CampusMonitoring() {
   const selectedReport = reports.find((r) => r.id === selectedId) || null;
   const confirmReport = reports.find((r) => r.id === confirm?.id) || null;
 
-  // ---------- Actions ----------
+  // Actions 
   const setStatus = (id, status) => {
     setReports((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
   };
@@ -179,7 +174,7 @@ export default function CampusMonitoring() {
     setConfirm(null);
   };
 
-  // ---------- Styles ----------
+  //  Styles 
   const statusStyles = {
     New: {
       badge: "bg-blue-50 text-blue-700 border-blue-200/60",
@@ -238,7 +233,7 @@ export default function CampusMonitoring() {
     },
   ];
 
-  // ---------- Map pins ----------
+  //  Map pins 
   const renderPin = (reportId, Icon, positionClass, bounce = false) => {
     const report = reports.find((r) => r.id === reportId);
     if (!report) return null;
@@ -350,7 +345,7 @@ export default function CampusMonitoring() {
 
         {/* Main Grid Layout */}
         <div className="grid grid-cols-3 gap-6 items-start">
-          {/* Map Simulation Panel (Spans 2 columns) */}
+          {/* Map Simulation Panel */}
           <div className="col-span-2 bg-[#eaf0eb] rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-2xs relative overflow-hidden min-h-[640px]">
             {/* Map Header details */}
             <div className="flex items-center justify-between z-10 bg-white/80 backdrop-blur-md px-4 py-3 rounded-xl border border-slate-200/60 shadow-2xs">
@@ -394,7 +389,6 @@ export default function CampusMonitoring() {
                 </div>
               ))}
 
-              {/* University-wide pin on the road */}
               {renderPin(1, ShieldAlert, "top-[48%] left-[46%] z-20", true)}
             </div>
 
@@ -411,9 +405,9 @@ export default function CampusMonitoring() {
             </div>
           </div>
 
-          {/* Right Sidebar: All Reports & Responder Status */}
+          {/* All Reports & Responder Status */}
           <div className="flex flex-col gap-6">
-            {/* All Reports Panel */}
+
             <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
                 <div>

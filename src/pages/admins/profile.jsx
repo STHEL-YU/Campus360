@@ -17,7 +17,6 @@ import {
   AlertCircle,
 } from "lucide-react";
 
-// Usage: <Profile role="Dean" /> or <Profile role="Administrator" />
 const ROLE_CONFIG = {
   Dean: {
     scopeLabel: "College",
@@ -96,7 +95,7 @@ export default function Profile({ role = "Dean" }) {
     setTimeout(() => setNotice(""), 3000);
   };
 
-  // ---------- Edit profile ----------
+  // Edit profile
   const openEdit = () => {
     setEditForm({ ...profile });
     setIsEditOpen(true);
@@ -117,7 +116,7 @@ export default function Profile({ role = "Dean" }) {
   const handleSaveProfile = () => {
     if (!editForm.name.trim() || !editForm.email.trim()) return;
 
-    // Password fields are optional: leave them empty to keep your password.
+    // Password fields are optional
     const wantsPasswordChange =
       passwords.current || passwords.next || passwords.confirm;
 
@@ -152,7 +151,7 @@ export default function Profile({ role = "Dean" }) {
     );
   };
 
-  // ---------- Change password ----------
+  //Change password 
   const handlePasswordChange = (field, value) => {
     setPasswordError("");
     setPasswords((prev) => ({ ...prev, [field]: value }));
@@ -189,7 +188,7 @@ export default function Profile({ role = "Dean" }) {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Left: Profile summary card */}
+          {/* Profile summary card */}
           <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col items-center text-center gap-4 shadow-2xs">
             <div className="w-24 h-24 rounded-3xl bg-gradient-to-tr from-blue-500 to-blue-700 text-white flex items-center justify-center font-bold text-3xl shadow-md shadow-blue-500/20">
               {initials(profile.name)}
@@ -220,7 +219,7 @@ export default function Profile({ role = "Dean" }) {
             </button>
           </div>
 
-          {/* Right: Details and Access */}
+          {/* Details and Access */}
           <div className="lg:col-span-8 flex flex-col gap-6">
             {/* Account details */}
             <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs">

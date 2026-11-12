@@ -95,7 +95,7 @@ export default function UserManagement() {
 
   // View: 'directory' | 'pending'
   const [view, setView] = useState("directory");
-  const [directoryFilter, setDirectoryFilter] = useState("all"); // 'all' | 'blocked'
+  const [directoryFilter, setDirectoryFilter] = useState("all"); 
   const [searchTerm, setSearchTerm] = useState("");
 
   const [selectedId, setSelectedId] = useState(1);
@@ -131,7 +131,7 @@ export default function UserManagement() {
 
   const isSelectedBlocked = selectedUser?.status === "Blocked";
 
-  // ---------- Navigation ----------
+  // Navigation
   const showDirectory = (filter) => {
     setDirectoryFilter(filter);
     setView("directory");
@@ -141,7 +141,7 @@ export default function UserManagement() {
     setView("pending");
   };
 
-  // ---------- Edit ----------
+  // Edit 
   const openEdit = () => {
     if (!selectedUser) return;
     setEditForm({ ...selectedUser });
@@ -175,7 +175,7 @@ export default function UserManagement() {
     closeEdit();
   };
 
-  // ---------- Block / Unblock ----------
+  // Block / Unblock  
   const handleBlock = () => {
     setUsersList((prev) =>
       prev.map((u) => (u.id === selectedId ? { ...u, status: "Blocked" } : u)),
@@ -189,14 +189,14 @@ export default function UserManagement() {
     );
   };
 
-  // ---------- Delete ----------
+  // Delete 
   const handleDelete = () => {
     setUsersList((prev) => prev.filter((u) => u.id !== selectedId));
     setSelectedId(null);
     setIsDeleteOpen(false);
   };
 
-  // ---------- Approve / Decline ----------
+  // Approve / Decline 
   const handleApprove = () => {
     setUsersList((prev) =>
       prev.map((u) =>
@@ -212,7 +212,7 @@ export default function UserManagement() {
     setIsDeclineOpen(false);
   };
 
-  // ---------- Styles ----------
+  // Styles  
   const statusStyles = (status) => {
     if (status === "Active")
       return {
@@ -299,8 +299,7 @@ export default function UserManagement() {
               Manage approved students, faculty, administrators, and responders
             </p>
           </div>
-
-          {/* Search: name, ID, type, program / college, status */}
+ 
           {view === "directory" && (
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -358,10 +357,10 @@ export default function UserManagement() {
           })}
         </div>
 
-        {/* ===================== DIRECTORY VIEW ===================== */}
+        {/* DIRECTORY VIEW  */}
         {view === "directory" && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Side: Users Directory Table */}
+            {/* Users Directory Table */}
             <div className="lg:col-span-8 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs transition-all">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
                 <div>
@@ -464,7 +463,7 @@ export default function UserManagement() {
               </div>
             </div>
 
-            {/* Right Side: Selected User Info Card */}
+            {/* Selected User Info Card */}
             {selectedUser ? (
               <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-5 shadow-2xs">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-4">
@@ -592,7 +591,7 @@ export default function UserManagement() {
           </div>
         )}
 
-        {/* ===================== PENDING REVIEW VIEW ===================== */}
+        {/* PENDING REVIEW VIEW */}
         {view === "pending" && (
           <div className="flex flex-col gap-4">
             <div>
@@ -606,7 +605,7 @@ export default function UserManagement() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* Left Side: Pending Requests List */}
+              {/* Pending Requests List */}
               <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs">
                 <div className="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
                   <div>
@@ -696,7 +695,7 @@ export default function UserManagement() {
                 </div>
               </div>
 
-              {/* Right Side: Review Card */}
+              {/* Review Card */}
               <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs min-h-[320px]">
                 {pendingSelected ? (
                   <div className="flex flex-col gap-5">

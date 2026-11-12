@@ -17,7 +17,6 @@ import {
   CalendarDays,
 } from "lucide-react";
 
-// Show the "Test" buttons so you can preview the sounds. Set to false in production.
 const DEMO_MODE = true;
 
 // Routes
@@ -27,7 +26,7 @@ const ROUTES = {
   news: "/news",
 };
 
-// ---------- Notification sounds (generated with the Web Audio API, no files needed) ----------
+//  Notification sounds 
 const SOUNDS = {
   incident: Array.from({ length: 10 }, (_, i) => ({
     freq: i % 2 === 0 ? 880 : 660,
@@ -50,7 +49,7 @@ const SOUNDS = {
   ],
 };
 
-// ---------- Sample pools used by the Test buttons ----------
+// Sample pools used by the Test buttons
 const INCIDENT_POOL = [
   { reporter: "Marco Dizon", category: "Fire Alarm", location: "Science Hall" },
   {
@@ -112,7 +111,6 @@ const KIND_STYLES = {
   },
 };
 
-// Ad-style banner colors for the news column (same palette as the rest of the UI)
 const AD_STYLES = [
   "from-blue-600 to-blue-500",
   "from-indigo-600 to-blue-500",
@@ -144,7 +142,7 @@ const buildMonthCells = (year, month) => {
   return cells;
 };
 
-// Live clock hook
+
 const useNow = () => {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -154,7 +152,7 @@ const useNow = () => {
   return now;
 };
 
-// `onNavigate` is optional. With react-router, pass: onNavigate={(path) => navigate(path)}
+
 export default function Dashboard({ onNavigate }) {
   const go = (path) => {
     if (!path) return;
@@ -255,7 +253,7 @@ export default function Dashboard({ onNavigate }) {
     { name: "Education", count: 29, width: "42%" },
   ];
 
-  // ---------- Sound ----------
+  // Sound 
   const getAudioContext = () => {
     if (!audioCtxRef.current) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -299,15 +297,14 @@ export default function Dashboard({ onNavigate }) {
     }
   };
 
-  // Browsers only allow sound after a click, so sound starts off until enabled.
   const toggleSound = () => {
     const next = !soundOn;
     setSoundOn(next);
     soundRef.current = next;
-    if (next) getAudioContext(); // unlock audio on this click
+    if (next) getAudioContext(); 
   };
 
-  // ---------- Toasts ----------
+  // Toasts 
   const pushToast = (kind, detail) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [{ id, kind, detail }, ...prev].slice(0, 4));
@@ -320,7 +317,6 @@ export default function Dashboard({ onNavigate }) {
   const dismissToast = (id) =>
     setToasts((prev) => prev.filter((t) => t.id !== id));
 
-  // The "New" highlight fades after 10 seconds
   const expireNew = (setter, id) => {
     setTimeout(
       () =>
@@ -333,8 +329,7 @@ export default function Dashboard({ onNavigate }) {
     );
   };
 
-  // ---------- Incoming events ----------
-  // Call these from your backend / websocket / polling when real data arrives.
+  // Incoming events 
   const addIncident = (data) => {
     const n = seq.current.incident++;
     const pick = data || INCIDENT_POOL[n % INCIDENT_POOL.length];
@@ -408,7 +403,7 @@ export default function Dashboard({ onNavigate }) {
 
   const newCount = (items) => items.filter((i) => i.isNew).length;
 
-  // ---------- Calendar ----------
+  // Calendar
   const calCells = buildMonthCells(calView.year, calView.month);
   const isToday = (day) =>
     day === now.getDate() &&
@@ -435,7 +430,7 @@ export default function Dashboard({ onNavigate }) {
 
   return (
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none">
-      {/* Toast notifications (click to open the matching page) */}
+      {/* Toast notifications */}
       <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 w-80">
         {toasts.map((toast) => {
           const style = KIND_STYLES[toast.kind];
@@ -536,9 +531,8 @@ export default function Dashboard({ onNavigate }) {
           </div>
         </div>
 
-        {/* Two-column layout: dashboard on the left, news + time + calendar on the right */}
         <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
-          {/* ---------- LEFT: Main dashboard ---------- */}
+          {/*Main dashboard  */}
           <div className="flex flex-col gap-6 min-w-0">
             {/* Metric Cards Grid */}
             <div className="grid grid-cols-5 gap-4">
@@ -633,7 +627,7 @@ export default function Dashboard({ onNavigate }) {
               </div>
             </div>
 
-            {/* Incident reports (new ones highlighted) + Reports by college */}
+            {/* Incident reports  + Reports by college */}
             <div className="grid grid-cols-3 gap-6">
               <div className="col-span-2 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-2xs">
                 <div className="flex items-center justify-between mb-4">
@@ -775,9 +769,8 @@ export default function Dashboard({ onNavigate }) {
               </div>
             </div>
 
-            {/* New accounts + Trends + Reports by college */}
             <div className="grid grid-cols-2 gap-6">
-              {/* New registered accounts (click → /users) */}
+              {/* New registered accounts */}
               <div
                 onClick={() => go(ROUTES.users)}
                 className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-4 shadow-2xs cursor-pointer hover:border-emerald-300 transition-colors"
@@ -860,9 +853,9 @@ export default function Dashboard({ onNavigate }) {
             </div>
           </div>
 
-          {/* ---------- RIGHT: News, time, calendar ---------- */}
+          {/* News, time, calendar*/}
           <div className="flex flex-col gap-6 min-w-0">
-            {/* News & announcements (ad-style boxes) */}
+            {/* News & announcements */}
             <aside className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col gap-4 shadow-2xs">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">

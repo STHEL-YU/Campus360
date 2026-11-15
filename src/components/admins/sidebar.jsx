@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -10,12 +10,24 @@ import {
   User,
   Loader2,
 } from "lucide-react";
-import { signOut } from "../../auth";
+import { getAdminProfile, signOut } from "../../auth";
 
 export default function Sidebar() {
   const navigate = useNavigate();
+  const admin = getAdminProfile() || {};
+  const adminName =
+    [admin.first_name, admin.middle_name, admin.last_name]
+      .filter(Boolean)
+      .join(" ") || "Administrator";
+  const adminInitials =
+    [admin.first_name, admin.last_name]
+      .filter(Boolean)
+      .map((name) => name[0])
+      .join("")
+      .toUpperCase() || "AD";
   const [showLogout, setShowLogout] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   /* Navigation Menu Items */
   const menuItems = [
@@ -42,14 +54,27 @@ export default function Sidebar() {
 
   const confirmLogout = async () => {
     setLoggingOut(true);
+    setLogoutError("");
+    let loggedOut = false;
     try {
-      // TODO: call your API here (e.g. await api.logout()) if you have one.
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      signOut();
+      const response = await fetch("/api/admin/logout", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-Campus360-Admin": "1" },
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to log out.");
+      }
+
+      signOut("admin");
       navigate("/login", { replace: true });
+      loggedOut = true;
+    } catch (error) {
+      setLogoutError(error.message || "Unable to log out.");
     } finally {
       setLoggingOut(false);
-      setShowLogout(false);
+      if (loggedOut) setShowLogout(false);
     }
   };
 
@@ -139,18 +164,21 @@ export default function Sidebar() {
           {/* User Profile Card */}
           <div className="flex items-center gap-3 px-2 py-1">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold text-xs tracking-wider shadow-md shadow-blue-500/20">
-              DM
+              {adminInitials}
             </div>
             <div className="flex flex-col overflow-hidden flex-1 min-w-0">
               <span className="text-sm font-bold text-white truncate">
-                Dr. Elena Garcia
+                {adminName}
               </span>
               <span className="text-[11px] text-slate-400 truncate">
-                College of Engineering
+                {admin.college || "Administrator"}
               </span>
             </div>
             <button
-              onClick={() => setShowLogout(true)}
+              onClick={() => {
+                setLogoutError("");
+                setShowLogout(true);
+              }}
               title="Log out"
               aria-label="Log out"
               className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-colors"
@@ -188,6 +216,11 @@ export default function Sidebar() {
                 <p className="text-xs text-slate-500 leading-relaxed">
                   You will need to sign in again to open the dashboard.
                 </p>
+                {logoutError && (
+                  <p className="mt-2 text-xs text-rose-600" role="alert">
+                    {logoutError}
+                  </p>
+                )}
               </div>
             </div>
 

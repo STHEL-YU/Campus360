@@ -10,8 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@react-oauth/google": "^0.13.5",
     "@tailwindcss/vite": "^4.3.5",
+    "@vercel/blob": "^2.9.0",
+    "dotenv": "^18.0.10",
+    "google-auth-library": "^11.3.4",
     "lucide-react": "^1.72.0",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",

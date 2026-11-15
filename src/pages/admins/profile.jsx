@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import { useState } from "react";
+import { getAdminProfile } from "../../auth";
 import {
   Mail,
   Phone,
@@ -28,15 +29,6 @@ const ROLE_CONFIG = {
       "Review reports filed in your college",
       "View campus monitoring (read-only)",
     ],
-    defaults: {
-      name: "Dr. Elena Garcia",
-      email: "elena.garcia@campus360.edu",
-      phone: "+63 917 555 0142",
-      employeeId: "DEAN-10482",
-      scope: "College of Engineering",
-      joined: "Jun 3, 2019",
-      lastLogin: "Today, 8:42 AM",
-    },
   },
   Administrator: {
     scopeLabel: "Office",
@@ -48,22 +40,34 @@ const ROLE_CONFIG = {
       "Accept, resolve, decline and delete campus reports",
       "View campus monitoring and responder status",
     ],
-    defaults: {
-      name: "Dr. Maria Santos",
-      email: "maria.santos@campus360.edu",
-      phone: "+63 917 555 0199",
-      employeeId: "ADM-99012",
-      scope: "Central Administration",
-      joined: "Jan 15, 2018",
-      lastLogin: "Today, 7:58 AM",
-    },
   },
 };
 
-export default function Profile({ role = "Dean" }) {
-  const config = ROLE_CONFIG[role] || ROLE_CONFIG.Dean;
+export default function Profile({ role = "Administrator" }) {
+  const config = ROLE_CONFIG[role] || ROLE_CONFIG.Administrator;
 
-  const [profile, setProfile] = useState(config.defaults);
+  const [profile, setProfile] = useState(() => {
+    const admin = getAdminProfile() || {};
+    const joinedDate = admin.created_at ? new Date(admin.created_at) : null;
+    const name = [
+      admin.first_name,
+      admin.middle_name,
+      admin.last_name,
+    ].filter(Boolean).join(" ");
+
+    return {
+      name: name || "Administrator",
+      email: admin.email || "Not provided",
+      phone: admin.phone || "Not provided",
+      employeeId: admin.employee_id || "Not provided",
+      scope: admin.college || "Not provided",
+      joined:
+        joinedDate && !Number.isNaN(joinedDate.getTime())
+          ? joinedDate.toLocaleDateString()
+          : "Not available",
+      lastLogin: "Not available",
+    };
+  });
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editForm, setEditForm] = useState(null);
   const [notice, setNotice] = useState("");
@@ -161,9 +165,8 @@ export default function Profile({ role = "Dean" }) {
     { icon: Mail, label: "Email", value: profile.email },
     { icon: Phone, label: "Phone", value: profile.phone || "Not provided" },
     { icon: Shield, label: "Employee ID", value: profile.employeeId },
-    { icon: Building2, label: config.scopeLabel, value: profile.scope },
+    { icon: Building2, label: "College", value: profile.scope },
     { icon: Calendar, label: "Member since", value: profile.joined },
-    { icon: Clock, label: "Last sign-in", value: profile.lastLogin },
   ];
 
   return (

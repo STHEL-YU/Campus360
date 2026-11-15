@@ -153,9 +153,21 @@ function StudentProfileRoute() {
 
   return (
     <StudentProfile
-      onLogout={() => {
-        signOut("student");
-        navigate("/student/login", { replace: true });
+      onLogout={async () => {
+        try {
+          const response = await fetch("/api/student/logout", {
+            method: "POST",
+            credentials: "same-origin",
+          });
+          if (!response.ok) {
+            throw new Error("Unable to clear the student session.");
+          }
+        } catch (error) {
+          console.error("Student logout request failed", error);
+        } finally {
+          signOut("student");
+          navigate("/student/login", { replace: true });
+        }
       }}
     />
   );
@@ -183,16 +195,43 @@ function AdminLoginRoute() {
   return (
     <AdminLogin
       onNavigate={navigate}
-      onLogin={async ({ email, password }) => {
-        // Replace with real admin authentication API later
-        signIn("admin");
-        navigate("/dashboard", { replace: true });
-      }}
-      onGoogle={async ({ mode, profile }) => {
-        // Replace with real Google authentication later
+      onGoogle={async ({ mode, credential, profile }) => {
+        const action = mode === "signup" ? "signup" : "login";
+        const response = await fetch(`/api/admin/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ credential, profile }),
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to authenticate admin.");
+        }
+
         if (mode === "signin") {
-          signIn("admin");
-          navigate("/dashboard", { replace: true });
+          signIn("admin", result.admin);
+        }
+      }}
+      onEmailPassword={async ({ mode, email, password, profile }) => {
+        const action = mode === "signup" ? "signup" : "login";
+        const response = await fetch(`/api/admin/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            method: "password",
+            email,
+            password,
+            profile,
+          }),
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to authenticate admin.");
+        }
+
+        if (mode === "signin") {
+          signIn("admin", result.admin);
         }
       }}
     />
@@ -211,8 +250,8 @@ function StudentLoginRoute() {
 
   return (
     <StudentLogin
-      onLogin={async (credentials) => {
-        signIn("student");
+      onLogin={async (student) => {
+        signIn("student", student);
         navigate("/student/dashboard", { replace: true });
       }}
       onRegisterClick={() => navigate("/student/signup")}

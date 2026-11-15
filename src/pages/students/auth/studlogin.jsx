@@ -1,6 +1,6 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Shield, Lock, ArrowRight, Eye, EyeOff } from "lucide-react";
+import { Shield, ArrowRight, Eye, EyeOff } from "lucide-react";
 
 export default function Login({ onLogin }) {
   const [credentials, setCredentials] = useState({
@@ -9,18 +9,37 @@ export default function Login({ onLogin }) {
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMessage("");
 
-    // Simulate API sign-in call
-    setTimeout(() => {
-      setLoading(false);
-      if (onLogin) {
-        onLogin(credentials);
+    try {
+      const response = await fetch("/api/student/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: credentials.identifier.trim(),
+          password: credentials.password,
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to sign in.");
       }
-    }, 600);
+
+      if (onLogin) {
+        await onLogin(result.student);
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Unable to sign in.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -69,6 +88,11 @@ export default function Login({ onLogin }) {
       {/* Form Container (Clean Light Mode Bottom Card) */}
       <div className="flex-1 px-6 pt-8 pb-10 max-w-md mx-auto w-full flex flex-col justify-between">
         <form onSubmit={handleSubmit} className="space-y-5">
+          {errorMessage && (
+            <p className="text-xs text-red-600" role="alert">
+              {errorMessage}
+            </p>
+          )}
           <div>
             <span className="text-[10px] font-bold tracking-wider text-blue-600 uppercase">
               Welcome Back
@@ -84,7 +108,7 @@ export default function Login({ onLogin }) {
           {/* Email or ID Input */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700">
-              Email or Student/Faculty ID
+              Email or Student ID
             </label>
             <input
               type="text"
@@ -147,7 +171,7 @@ export default function Login({ onLogin }) {
               disabled={loading}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-3.5 px-4 rounded-xl shadow-lg shadow-blue-600/30 transition-all flex items-center justify-center space-x-2 active:scale-[0.99] disabled:opacity-70"
             >
-              <span>{loading ? "Signing in..." : "Sign in securely"}</span>
+              <span>{loading ? "Signing in..." : "Sign in"}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>

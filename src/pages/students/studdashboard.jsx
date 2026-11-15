@@ -1,7 +1,11 @@
-import React from "react";
+import { getStudentProfile } from "../../auth";
 import { AlertTriangle, ChevronRight, CheckCircle2, Clock } from "lucide-react";
 
 export default function Dashboard({ onReportClick }) {
+  const profile = getStudentProfile() || {};
+  const firstName = profile.fullName?.trim().split(/\s+/)[0] || "Student";
+  const avatar = profile.profileImage || "/default-avatar.svg";
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-28">
       {/* Main Container */}
@@ -10,21 +14,24 @@ export default function Dashboard({ onReportClick }) {
         <div className="flex items-center justify-between pt-2">
           <div>
             <span className="text-xs font-bold tracking-wider text-slate-400 uppercase">
-              Monday, October 14
+              Student dashboard
             </span>
             <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 mt-0.5">
-              Good morning, Alex!
+              Good morning, {firstName}!
             </h1>
             <p className="text-xs font-medium text-slate-500 mt-0.5">
-              College of Engineering · Student
+              {profile.college || "College"} · {profile.role || "Student"}
             </p>
           </div>
 
           {/* Avatar / Profile Graphic */}
           <div className="w-14 h-14 rounded-2xl overflow-hidden border border-slate-200 shadow-sm">
             <img
-              src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80"
-              alt="Profile"
+              src={avatar}
+              alt={`${profile.fullName || "Student"}'s profile`}
+              onError={(event) => {
+                event.currentTarget.src = "/default-avatar.svg";
+              }}
               className="w-full h-full object-cover"
             />
           </div>

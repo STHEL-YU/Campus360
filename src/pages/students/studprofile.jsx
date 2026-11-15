@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import { useState } from "react";
+import { getStudentProfile, updateStudentProfile } from "../../auth";
 import {
   User,
   Bell,
@@ -14,21 +15,26 @@ import {
 } from "lucide-react";
 
 export default function Profile({ onLogout }) {
-  const [profile, setProfile] = useState({
-    name: "Alexandra Reyes",
-    studentId: "2024-01842",
-    college: "College of Engineering",
-    program: "BS Information Technology",
-    yearLevel: "Third year",
-    avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+  const [profile, setProfile] = useState(() => {
+    const student = getStudentProfile() || {};
+    return {
+      name: student.fullName || "Student",
+      studentId: student.schoolId || "",
+      email: student.email || "",
+      accountType: student.role || "Student",
+      college: student.college || "Not provided",
+      program: student.program || "Not provided",
+      yearLevel: student.yearLevel || "Not provided",
+      avatar: student.profileImage || "/default-avatar.svg",
+    };
   });
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(profile);
 
-  const [avatarFile, setAvatarFile] = useState(null); // raw file, for your upload API
+  const [avatarFile, setAvatarFile] = useState(null);
   const [avatarError, setAvatarError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const [pwForm, setPwForm] = useState({
     current: "",
@@ -49,11 +55,13 @@ export default function Profile({ onLogout }) {
     setIsEditing(true);
   };
 
-  const closeEdit = () => setIsEditing(false);
+  const closeEdit = () => {
+    if (!isSaving) setIsEditing(false);
+  };
 
   const handleAvatarChange = (e) => {
     const file = e.target.files?.[0];
-    e.target.value = ""; // lets the same file be picked again
+    e.target.value = "";
     if (!file) return;
 
     if (!["image/jpeg", "image/png"].includes(file.type)) {
@@ -72,10 +80,8 @@ export default function Profile({ onLogout }) {
     reader.readAsDataURL(file);
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-
-    // Password is optional: only validate if the student typed something
     const wantsPasswordChange = pwForm.next || pwForm.confirm;
     if (wantsPasswordChange) {
       if (pwForm.next.length < 8) {
@@ -89,15 +95,54 @@ export default function Profile({ onLogout }) {
     }
     setPwError("");
 
-    // TODO: Connect to your API or backend update logic
-    // - send `draft` (profile fields) and `avatarFile` (if not null)
-    // - send pwForm.next only if wantsPasswordChange
-    setProfile(draft);
-    setIsEditing(false);
+    setIsSaving(true);
+    setAvatarError("");
+    try {
+      let updatedDraft = draft;
+      if (avatarFile) {
+        const student = getStudentProfile();
+        if (!student?.id) {
+          throw new Error("Please sign in again before uploading a photo.");
+        }
+
+        const { upload } = await import("@vercel/blob/client");
+        const extension = avatarFile.type === "image/png" ? "png" : "jpg";
+        const blob = await upload(
+          `student-profile/${student.id}/${crypto.randomUUID()}.${extension}`,
+          avatarFile,
+          {
+            access: "private",
+            handleUploadUrl: "/api/student/upload",
+          },
+        );
+        const response = await fetch("/api/student/profile", {
+          method: "PATCH",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profileImagePath: blob.pathname }),
+        });
+        const result = await response.json();
+        if (!response.ok || typeof result.profileImage !== "string") {
+          throw new Error(result.error || "Unable to save the profile photo.");
+        }
+
+        const avatar = `${result.profileImage}?v=${Date.now()}`;
+        updatedDraft = { ...draft, avatar };
+        updateStudentProfile({ profileImage: result.profileImage });
+      }
+
+      setProfile(updatedDraft);
+      setDraft(updatedDraft);
+      setIsEditing(false);
+    } catch (error) {
+      setAvatarError(error.message || "Unable to save the profile photo.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const closeLogoutConfirm = () => {
-    if (isLoggingOut) return; // can't dismiss while logging out
+    if (isLoggingOut) return;
     setShowLogoutConfirm(false);
   };
 
@@ -117,7 +162,7 @@ export default function Profile({ onLogout }) {
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-32">
       {/* Main Container */}
       <main className="px-5 pt-4 max-w-md mx-auto space-y-6">
-        {/* Header Profile Card (Deep Navy Theme with Centered Avatar) */}
+        {/* Header Profile Card */}
         <div className="bg-[#0f172a] rounded-3xl p-6 text-center text-white shadow-lg relative overflow-hidden">
           {/* Subtle Background Glow */}
           <div className="absolute -right-10 -top-10 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
@@ -127,8 +172,11 @@ export default function Profile({ onLogout }) {
             <div className="relative">
               <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-slate-700 shadow-md">
                 <img
-                  src={profile.avatar}
-                  alt="Profile Avatar"
+                  src={profile.avatar || "/default-avatar.svg"}
+                  alt={`${profile.name}'s profile`}
+                  onError={(event) => {
+                    event.currentTarget.src = "/default-avatar.svg";
+                  }}
                   className="w-full h-full object-cover"
                 />
               </div>
@@ -164,7 +212,15 @@ export default function Profile({ onLogout }) {
           <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-3.5 text-xs">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <span className="text-slate-400 font-medium">Account type</span>
-              <span className="font-bold text-slate-900">Student</span>
+              <span className="font-bold text-slate-900">
+                {profile.accountType}
+              </span>
+            </div>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <span className="text-slate-400 font-medium">Email</span>
+              <span className="font-bold text-slate-900 break-all text-right ml-4">
+                {profile.email || "Not provided"}
+              </span>
             </div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <span className="text-slate-400 font-medium">College</span>
@@ -293,15 +349,18 @@ export default function Profile({ onLogout }) {
                 <div className="relative">
                   <div className="w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200 shadow-md">
                     <img
-                      src={draft.avatar}
+                      src={draft.avatar || "/default-avatar.svg"}
                       alt="Profile preview"
+                      onError={(event) => {
+                        event.currentTarget.src = "/default-avatar.svg";
+                      }}
                       className="w-full h-full object-cover"
                     />
                   </div>
                   <label
                     htmlFor="avatar-input"
                     aria-label="Change profile photo"
-                    className="absolute -bottom-2 -right-2 w-9 h-9 bg-blue-600 hover:bg-blue-700 text-white rounded-full flex items-center justify-center shadow-lg border-2 border-white cursor-pointer transition-colors"
+                    className={`absolute -bottom-2 -right-2 w-9 h-9 bg-blue-600 hover:bg-blue-700 text-white rounded-full flex items-center justify-center shadow-lg border-2 border-white transition-colors ${isSaving ? "pointer-events-none cursor-not-allowed opacity-60" : "cursor-pointer"}`}
                   >
                     <Camera className="w-4 h-4" />
                   </label>
@@ -310,6 +369,7 @@ export default function Profile({ onLogout }) {
                     type="file"
                     accept="image/jpeg,image/png"
                     onChange={handleAvatarChange}
+                    disabled={isSaving}
                     className="hidden"
                   />
                 </div>
@@ -468,15 +528,18 @@ export default function Profile({ onLogout }) {
                 <button
                   type="button"
                   onClick={closeEdit}
+                  disabled={isSaving}
                   className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-3.5 rounded-2xl transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-3.5 rounded-2xl shadow-md transition-colors"
+                  disabled={isSaving}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-3.5 rounded-2xl shadow-md transition-colors disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  Save changes
+                  {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {isSaving ? "Uploading..." : "Save changes"}
                 </button>
               </div>
             </form>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Users,
   Shield,
@@ -19,86 +19,41 @@ import {
   Unlock,
   MousePointerClick,
   Search,
+  LoaderCircle,
 } from "lucide-react";
 
+async function requestStudents(method, body, signal) {
+  const response = await fetch("/api/admin/students", {
+    method,
+    credentials: "same-origin",
+    headers: {
+      "X-Campus360-Admin": "1",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal,
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to manage student accounts.");
+  }
+  return result;
+}
+
 export default function UserManagement() {
-  const [usersList, setUsersList] = useState([
-    {
-      id: 1,
-      name: "Alexandra Reyes",
-      studentId: "2024-01842",
-      accountType: "Student",
-      college: "College of Engineering",
-      program: "BS Information Technology",
-      yearLevel: "Third year",
-      status: "Active",
-      email: "alexandra.reyes@campus360.edu",
-    },
-    {
-      id: 2,
-      name: "James Villanueva",
-      studentId: "2024-02910",
-      accountType: "Student",
-      college: "College of Business",
-      program: "BS Accountancy",
-      yearLevel: "Second year",
-      status: "Active",
-      email: "james.villanueva@campus360.edu",
-    },
-    {
-      id: 3,
-      name: "Dr. Maria Santos",
-      studentId: "ADM-99012",
-      accountType: "Administrator",
-      college: "Central Administration",
-      program: "System Management",
-      yearLevel: "Staff",
-      status: "Active",
-      email: "maria.santos@campus360.edu",
-    },
-    {
-      id: 4,
-      name: "Carlos Mendoza",
-      studentId: "2023-00471",
-      accountType: "Student",
-      college: "College of Education",
-      program: "BSEd Mathematics",
-      yearLevel: "Fourth year",
-      status: "Blocked",
-      email: "carlos.mendoza@campus360.edu",
-    },
-    {
-      id: 5,
-      name: "Bianca Dela Cruz",
-      studentId: "2025-03318",
-      accountType: "Student",
-      college: "College of Nursing",
-      program: "BS Nursing",
-      yearLevel: "First year",
-      status: "Pending",
-      email: "bianca.delacruz@campus360.edu",
-      submitted: "Nov 12, 2026",
-    },
-    {
-      id: 6,
-      name: "Prof. Ramon Lopez",
-      studentId: "FAC-20458",
-      accountType: "Faculty",
-      college: "College of Engineering",
-      program: "Computer Engineering",
-      yearLevel: "Staff",
-      status: "Pending",
-      email: "ramon.lopez@campus360.edu",
-      submitted: "Nov 13, 2026",
-    },
-  ]);
+  const [usersList, setUsersList] = useState([]);
+  const [adminCollege, setAdminCollege] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [requestError, setRequestError] = useState("");
 
   // View: 'directory' | 'pending'
   const [view, setView] = useState("directory");
-  const [directoryFilter, setDirectoryFilter] = useState("all"); 
+  const [directoryFilter, setDirectoryFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const [selectedId, setSelectedId] = useState(1);
+  const [selectedId, setSelectedId] = useState(null);
   const [pendingSelectedId, setPendingSelectedId] = useState(null);
 
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -106,14 +61,74 @@ export default function UserManagement() {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isBlockOpen, setIsBlockOpen] = useState(false);
   const [isDeclineOpen, setIsDeclineOpen] = useState(false);
+  const [failedIdImage, setFailedIdImage] = useState(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let hasLoaded = false;
+    let refreshInFlight = false;
+
+    async function loadStudents() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const result = await requestStudents(
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (
+          !Array.isArray(result.users) ||
+          typeof result.college !== "string"
+        ) {
+          throw new Error("The server returned an invalid student list.");
+        }
+
+        const isFirstLoad = !hasLoaded;
+        hasLoaded = true;
+        setAdminCollege(result.college);
+        setUsersList(result.users);
+        setSelectedId((currentId) => {
+          if (currentId && result.users.some((user) => user.id === currentId)) {
+            return currentId;
+          }
+          return currentId || isFirstLoad ? result.users[0]?.id ?? null : null;
+        });
+        setPendingSelectedId((currentId) => {
+          const pending = result.users.filter(
+            (user) => user.status === "Pending",
+          );
+          if (currentId && pending.some((user) => user.id === currentId)) {
+            return currentId;
+          }
+          return currentId || isFirstLoad ? pending[0]?.id ?? null : null;
+        });
+        setRequestError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setRequestError(error.message || "Unable to load student accounts.");
+        }
+      } finally {
+        refreshInFlight = false;
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+
+    loadStudents();
+    const refreshTimer = window.setInterval(loadStudents, 15000);
+    return () => {
+      window.clearInterval(refreshTimer);
+      controller.abort();
+    };
+  }, []);
 
   // ---------- Derived data ----------
-  const approvedUsers = usersList.filter((u) => u.status !== "Pending");
   const pendingUsers = usersList.filter((u) => u.status === "Pending");
   const blockedUsers = usersList.filter((u) => u.status === "Blocked");
+  const isInitialLoading = isLoading && usersList.length === 0;
 
   const visibleUsers =
-    directoryFilter === "blocked" ? blockedUsers : approvedUsers;
+    directoryFilter === "blocked" ? blockedUsers : usersList;
 
   // Search: name, ID, type, program / college, status
   const query = searchTerm.trim().toLowerCase();
@@ -125,7 +140,7 @@ export default function UserManagement() {
       ),
   );
 
-  const selectedUser = approvedUsers.find((u) => u.id === selectedId) || null;
+  const selectedUser = usersList.find((u) => u.id === selectedId) || null;
   const pendingSelected =
     pendingUsers.find((u) => u.id === pendingSelectedId) || null;
 
@@ -141,7 +156,7 @@ export default function UserManagement() {
     setView("pending");
   };
 
-  // Edit 
+  // Edit
   const openEdit = () => {
     if (!selectedUser) return;
     setEditForm({ ...selectedUser });
@@ -157,59 +172,97 @@ export default function UserManagement() {
     setEditForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleUpdate = () => {
-    if (!editForm.name.trim() || !editForm.studentId.trim()) return;
+  const handleUpdate = async () => {
+    if (!editForm?.name.trim() || !editForm?.studentId.trim()) return;
 
-    setUsersList((prev) =>
-      prev.map((u) =>
-        u.id === editForm.id
-          ? {
-              ...editForm,
-              name: editForm.name.trim(),
-              studentId: editForm.studentId.trim(),
-              email: editForm.email.trim(),
-            }
-          : u,
-      ),
-    );
-    closeEdit();
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      const { user } = await requestStudents("PATCH", {
+        id: editForm.id,
+        fullName: editForm.name,
+        schoolId: editForm.studentId,
+        email: editForm.email,
+        role: editForm.accountType,
+        college: editForm.college,
+        program: editForm.program,
+        yearLevel: editForm.yearLevel,
+        status: editForm.status,
+      });
+      setUsersList((previous) =>
+        previous.map((item) => (item.id === user.id ? user : item)),
+      );
+      setSelectedId(user.id);
+      closeEdit();
+    } catch (error) {
+      setRequestError(error.message || "Unable to update the student.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  // Block / Unblock  
-  const handleBlock = () => {
-    setUsersList((prev) =>
-      prev.map((u) => (u.id === selectedId ? { ...u, status: "Blocked" } : u)),
-    );
-    setIsBlockOpen(false);
+  const updateStatus = async (id, status) => {
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      const { user } = await requestStudents("PATCH", { id, status });
+      setUsersList((previous) =>
+        previous.map((item) => (item.id === user.id ? user : item)),
+      );
+      return true;
+    } catch (error) {
+      setRequestError(error.message || "Unable to update the student status.");
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleUnblock = () => {
-    setUsersList((prev) =>
-      prev.map((u) => (u.id === selectedId ? { ...u, status: "Active" } : u)),
-    );
+  const removeStudent = async (id) => {
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      await requestStudents("DELETE", { id });
+      setUsersList((previous) => previous.filter((item) => item.id !== id));
+      return true;
+    } catch (error) {
+      setRequestError(error.message || "Unable to delete the student.");
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  // Delete 
-  const handleDelete = () => {
-    setUsersList((prev) => prev.filter((u) => u.id !== selectedId));
-    setSelectedId(null);
-    setIsDeleteOpen(false);
+  const handleBlock = async () => {
+    if (await updateStatus(selectedId, "Blocked")) setIsBlockOpen(false);
   };
 
-  // Approve / Decline 
-  const handleApprove = () => {
-    setUsersList((prev) =>
-      prev.map((u) =>
-        u.id === pendingSelectedId ? { ...u, status: "Active" } : u,
-      ),
-    );
-    setPendingSelectedId(null);
+  const handleUnblock = async () => {
+    await updateStatus(selectedId, "Active");
   };
 
-  const handleDecline = () => {
-    setUsersList((prev) => prev.filter((u) => u.id !== pendingSelectedId));
-    setPendingSelectedId(null);
-    setIsDeclineOpen(false);
+  const handleDelete = async () => {
+    if (await removeStudent(selectedId)) {
+      setSelectedId(null);
+      setIsDeleteOpen(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (await updateStatus(pendingSelectedId, "Active")) {
+      setPendingSelectedId(
+        pendingUsers.find((user) => user.id !== pendingSelectedId)?.id ?? null,
+      );
+    }
+  };
+
+  const handleDecline = async () => {
+    if (await removeStudent(pendingSelectedId)) {
+      setPendingSelectedId(
+        pendingUsers.find((user) => user.id !== pendingSelectedId)?.id ?? null,
+      );
+      setIsDeclineOpen(false);
+    }
   };
 
   // Styles  
@@ -250,8 +303,8 @@ export default function UserManagement() {
     {
       key: "total",
       label: "Total users",
-      value: approvedUsers.length,
-      hint: "Approved campus members",
+      value: usersList.length,
+      hint: "Student and faculty accounts",
       icon: Users,
       iconWrap: "bg-blue-50 text-blue-600",
       active: view === "directory" && directoryFilter === "all",
@@ -296,7 +349,8 @@ export default function UserManagement() {
               User management
             </h1>
             <p className="text-xs text-slate-500">
-              Manage approved students, faculty, administrators, and responders
+              Manage student and faculty accounts in{" "}
+              {adminCollege || "your assigned college"}
             </p>
           </div>
  
@@ -323,6 +377,15 @@ export default function UserManagement() {
           )}
         </div>
 
+        {requestError && (
+          <div
+            className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-medium text-rose-700"
+            role="alert"
+          >
+            {requestError}
+          </div>
+        )}
+
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {statCards.map((card) => {
@@ -341,7 +404,11 @@ export default function UserManagement() {
                     {card.label}
                   </span>
                   <span className="text-3xl font-bold text-slate-900 leading-none">
-                    {card.value}
+                    {isInitialLoading ? (
+                      <span className="block h-8 w-14 animate-pulse rounded-md bg-slate-200" />
+                    ) : (
+                      card.value
+                    )}
                   </span>
                   <span className="text-[11px] text-slate-400 font-medium">
                     {card.hint}
@@ -367,14 +434,14 @@ export default function UserManagement() {
                   <h2 className="text-sm font-bold text-slate-900">
                     {directoryFilter === "blocked"
                       ? "Blocked users"
-                      : "Approved users directory"}
+                      : "Student and faculty accounts in your college"}
                   </h2>
                   <p className="text-[11px] text-slate-400 font-medium">
                     {query
                       ? `${filteredUsers.length} of ${visibleUsers.length} users match your search`
                       : directoryFilter === "blocked"
                         ? "Showing users with restricted access"
-                        : "Showing approved campus members"}
+                        : `Showing accounts for ${adminCollege || "your college"}`}
                   </p>
                 </div>
 
@@ -411,7 +478,17 @@ export default function UserManagement() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredUsers.map((user) => {
+                    {isInitialLoading
+                      ? Array.from({ length: 5 }, (_, index) => (
+                          <tr key={`loading-user-${index}`}>
+                            {Array.from({ length: 5 }, (_, cellIndex) => (
+                              <td key={cellIndex} className="py-4 px-4">
+                                <span className="block h-3 w-3/4 animate-pulse rounded bg-slate-200" />
+                              </td>
+                            ))}
+                          </tr>
+                        ))
+                      : filteredUsers.map((user) => {
                       const s = statusStyles(user.status);
 
                       return (
@@ -446,15 +523,13 @@ export default function UserManagement() {
                       );
                     })}
 
-                    {filteredUsers.length === 0 && (
+                    {!isLoading && filteredUsers.length === 0 && (
                       <tr>
                         <td
                           colSpan={5}
                           className="py-10 text-center text-slate-400 font-medium"
                         >
-                          {query
-                            ? "No users match your search."
-                            : "No users found."}
+                          {query ? "No users match your search." : "No users found."}
                         </td>
                       </tr>
                     )}
@@ -539,41 +614,67 @@ export default function UserManagement() {
                   </div>
                 </div>
 
-                <div className="pt-2 flex items-center gap-2">
-                  <button
-                    onClick={openEdit}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-md transition-all"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    <span>Edit</span>
-                  </button>
-
-                  {isSelectedBlocked ? (
+                {selectedUser.status !== "Pending" && (
+                  <div className="pt-2 flex items-center gap-2">
                     <button
-                      onClick={handleUnblock}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-semibold transition-colors"
+                      onClick={openEdit}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold shadow-md transition-all"
                     >
-                      <Unlock className="w-3.5 h-3.5" />
-                      <span>Unblock</span>
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Edit</span>
                     </button>
-                  ) : (
-                    <button
-                      onClick={() => setIsBlockOpen(true)}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-amber-200 text-amber-700 hover:bg-amber-50 rounded-xl text-xs font-semibold transition-colors"
-                    >
-                      <Ban className="w-3.5 h-3.5" />
-                      <span>Block</span>
-                    </button>
-                  )}
 
-                  <button
-                    onClick={() => setIsDeleteOpen(true)}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Delete</span>
-                  </button>
-                </div>
+                    {isSelectedBlocked ? (
+                      <button
+                        onClick={handleUnblock}
+                        disabled={isSaving}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 rounded-xl text-xs font-semibold transition-colors"
+                      >
+                        {isSaving ? (
+                          <LoaderCircle
+                            className="w-3.5 h-3.5 animate-spin"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Unlock className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isSaving ? "Unblocking..." : "Unblock"}</span>
+                      </button>
+                    ) : isInitialLoading ? (
+                      <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-5 shadow-2xs animate-pulse">
+                        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                          <div className="h-12 w-12 rounded-2xl bg-slate-200" />
+                          <div className="flex-1 space-y-2">
+                            <div className="h-3 w-1/2 rounded bg-slate-200" />
+                            <div className="h-3 w-3/4 rounded bg-slate-100" />
+                          </div>
+                        </div>
+                        {Array.from({ length: 5 }, (_, index) => (
+                          <div
+                            key={`user-detail-loading-${index}`}
+                            className="h-8 rounded bg-slate-100"
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setIsBlockOpen(true)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-amber-200 text-amber-700 hover:bg-amber-50 rounded-xl text-xs font-semibold transition-colors"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>Block</span>
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => setIsDeleteOpen(true)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="lg:col-span-4 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-5 shadow-2xs items-center justify-center text-center min-h-[320px]">
@@ -640,7 +741,17 @@ export default function UserManagement() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {pendingUsers.map((user) => {
+                      {isInitialLoading
+                        ? Array.from({ length: 5 }, (_, index) => (
+                            <tr key={`loading-pending-${index}`}>
+                              {Array.from({ length: 5 }, (_, cellIndex) => (
+                                <td key={cellIndex} className="py-4 px-4">
+                                  <span className="block h-3 w-3/4 animate-pulse rounded bg-slate-200" />
+                                </td>
+                              ))}
+                            </tr>
+                          ))
+                        : pendingUsers.map((user) => {
                         const s = statusStyles(user.status);
                         const isSelected = pendingSelectedId === user.id;
 
@@ -680,7 +791,7 @@ export default function UserManagement() {
                         );
                       })}
 
-                      {pendingUsers.length === 0 && (
+                      {!isLoading && pendingUsers.length === 0 && (
                         <tr>
                           <td
                             colSpan={5}
@@ -697,7 +808,24 @@ export default function UserManagement() {
 
               {/* Review Card */}
               <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs min-h-[320px]">
-                {pendingSelected ? (
+                {isInitialLoading ? (
+                  <div className="flex flex-col gap-5 animate-pulse">
+                    <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                      <div className="h-12 w-12 rounded-2xl bg-slate-200" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-3 w-1/2 rounded bg-slate-200" />
+                        <div className="h-3 w-3/4 rounded bg-slate-100" />
+                      </div>
+                    </div>
+                    <div className="h-40 rounded-xl bg-slate-100" />
+                    {Array.from({ length: 5 }, (_, index) => (
+                      <div
+                        key={`pending-detail-loading-${index}`}
+                        className="h-8 rounded bg-slate-100"
+                      />
+                    ))}
+                  </div>
+                ) : pendingSelected ? (
                   <div className="flex flex-col gap-5">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                       <div className="flex items-center gap-3">
@@ -721,6 +849,31 @@ export default function UserManagement() {
                         <X className="w-4 h-4" />
                       </button>
                     </div>
+
+                    {pendingSelected.accountType === "Student" && (
+                      <div className="flex flex-col gap-2">
+                        <h3 className="text-xs font-bold text-slate-700">
+                          Uploaded student ID
+                        </h3>
+                        {failedIdImage === pendingSelected.id ? (
+                          <p
+                            className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700"
+                            role="alert"
+                          >
+                            The student ID image could not be loaded.
+                          </p>
+                        ) : (
+                          <img
+                            key={pendingSelected.id}
+                            src={`/api/admin/student-image?studentId=${encodeURIComponent(pendingSelected.id)}`}
+                            alt={`${pendingSelected.name}'s school ID`}
+                            loading="lazy"
+                            onError={() => setFailedIdImage(pendingSelected.id)}
+                            className="max-h-64 w-full rounded-xl border border-slate-200 bg-slate-50 object-contain"
+                          />
+                        )}
+                      </div>
+                    )}
 
                     <div className="flex flex-col gap-4 text-xs">
                       <div className="flex items-center justify-between py-2 border-b border-slate-100">
@@ -786,13 +939,22 @@ export default function UserManagement() {
                     <div className="pt-2 flex items-center gap-2">
                       <button
                         onClick={handleApprove}
+                        disabled={isSaving}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all"
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Approve</span>
+                        {isSaving ? (
+                          <LoaderCircle
+                            className="w-3.5 h-3.5 animate-spin"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        )}
+                        <span>{isSaving ? "Approving..." : "Approve"}</span>
                       </button>
                       <button
                         onClick={() => setIsDeclineOpen(true)}
+                        disabled={isSaving}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
                       >
                         <XCircle className="w-3.5 h-3.5" />
@@ -887,8 +1049,6 @@ export default function UserManagement() {
                 >
                   <option value="Student">Student</option>
                   <option value="Faculty">Faculty</option>
-                  <option value="Administrator">Administrator</option>
-                  <option value="Responder">Responder</option>
                 </select>
               </div>
             </div>
@@ -951,11 +1111,18 @@ export default function UserManagement() {
               </button>
               <button
                 onClick={handleUpdate}
-                disabled={!editForm.name.trim() || !editForm.studentId.trim()}
+                disabled={isSaving || !editForm.name.trim() || !editForm.studentId.trim()}
                 className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-600/20 transition-all"
               >
-                <Save className="w-3.5 h-3.5" />
-                <span>Save Changes</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Saving..." : "Save Changes"}</span>
               </button>
             </div>
           </div>
@@ -999,10 +1166,18 @@ export default function UserManagement() {
               </button>
               <button
                 onClick={handleBlock}
+                disabled={isSaving}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-amber-600/20 transition-all"
               >
-                <Ban className="w-3.5 h-3.5" />
-                <span>Yes, block</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Ban className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Blocking..." : "Yes, block"}</span>
               </button>
             </div>
           </div>
@@ -1047,10 +1222,18 @@ export default function UserManagement() {
               </button>
               <button
                 onClick={handleDelete}
+                disabled={isSaving}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-rose-600/20 transition-all"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Yes, delete</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Deleting..." : "Yes, delete"}</span>
               </button>
             </div>
           </div>
@@ -1095,10 +1278,18 @@ export default function UserManagement() {
               </button>
               <button
                 onClick={handleDecline}
+                disabled={isSaving}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-rose-600/20 transition-all"
               >
-                <XCircle className="w-3.5 h-3.5" />
-                <span>Yes, decline</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <XCircle className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Declining..." : "Yes, decline"}</span>
               </button>
             </div>
           </div>

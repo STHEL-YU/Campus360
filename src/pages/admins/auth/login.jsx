@@ -1,33 +1,18 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import { GoogleLogin } from "@react-oauth/google";
 import {
   ShieldCheck,
-  Mail,
-  Lock,
-  Eye,
-  EyeOff,
   Loader2,
   AlertCircle,
-  CheckCircle2,
-  User,
-  Phone,
-  BadgeCheck,
-  Building2,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
+import Signup from "./signup.jsx";
 
 // Images live in src/assets/ (this file is src/pages/admins/auth/login.jsx)
 import ssu1 from "../../../assets/ssu1.jpg";
 import ssu2 from "../../../assets/ssu2.jpg";
 import ssu3 from "../../../assets/ssu3.jpg";
-
-const COLLEGES = [
-  "College of Engineering",
-  "College of Arts & Sciences",
-  "College of Business",
-  "College of Education",
-  "College of Nursing",
-];
 
 // Slide images come from src/assets (ssu1.jpg, ssu2.jpg, ssu3.jpg).
 // If an image fails to load, the built-in default image is shown instead.
@@ -90,27 +75,6 @@ const DEFAULT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 60
   </g>
 </svg>`;
 const DEFAULT_IMAGE = `data:image/svg+xml;utf8,${encodeURIComponent(DEFAULT_SVG)}`;
-
-const GoogleIcon = () => (
-  <svg viewBox="0 0 48 48" className="w-4 h-4" aria-hidden="true">
-    <path
-      fill="#EA4335"
-      d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"
-    />
-    <path
-      fill="#4285F4"
-      d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"
-    />
-    <path
-      fill="#FBBC05"
-      d="M10.5 28.7A14.5 14.5 0 0 1 9.5 24c0-1.6.3-3.2.8-4.7l-7.9-6.1A24 24 0 0 0 0 24c0 3.9.9 7.5 2.6 10.8l7.9-6.1z"
-    />
-    <path
-      fill="#34A853"
-      d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"
-    />
-  </svg>
-);
 
 function Slideshow({ className = "" }) {
   const [index, setIndex] = useState(0);
@@ -210,140 +174,75 @@ function Slideshow({ className = "" }) {
   );
 }
 
-const inputBase =
-  "w-full bg-white border border-slate-200 rounded-xl py-2.5 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
-
-function Field({ id, label, icon: Icon, optional, children }) {
-  return (
-    <div className="flex flex-col gap-1.5 min-w-0">
-      <label htmlFor={id} className="text-xs font-semibold text-slate-700">
-        {label}
-        {optional && (
-          <span className="text-slate-400 font-medium"> (optional)</span>
-        )}
-      </label>
-      <div className="relative">
-        {Icon && (
-          <Icon className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-        )}
-        {children}
-      </div>
-    </div>
-  );
-}
-
-export default function Login({ onLogin, onGoogle, onNavigate }) {
-  const [mode, setMode] = useState("signin"); 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [profile, setProfile] = useState({
-    firstName: "",
-    middleName: "",
-    lastName: "",
-    phone: "",
-    employeeId: "",
-    college: "",
-  });
+export default function Login({ onGoogle, onEmailPassword, onNavigate }) {
+  const [mode, setMode] = useState("signin");
   const [loading, setLoading] = useState(null);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
 
   const isSignup = mode === "signup";
   const busy = loading !== null;
 
-  const setField = (key) => (e) =>
-    setProfile((p) => ({ ...p, [key]: e.target.value }));
-
-  // Phone: allow digits, +, spaces and dashes only
-  const setPhone = (e) =>
-    setProfile((p) => ({
-      ...p,
-      phone: e.target.value.replace(/[^\d+\-\s]/g, ""),
-    }));
-
   const switchMode = (next) => {
     setMode(next);
     setError("");
-    setNotice("");
   };
 
-  const handleEmailLogin = async (e) => {
-    e.preventDefault();
+  const handleGoogleSuccess = async ({ credential }) => {
     setError("");
-    setNotice("");
 
-    if (!email.trim() || !password) {
-      setError("Enter your email and password.");
+    if (!credential) {
+      setError("Google did not provide an identity token. Try again.");
       return;
     }
 
     try {
-      setLoading("email");
-      await onLogin?.({ email: email.trim(), password });
+      setLoading("google");
+      await onGoogle({ mode: "signin", credential });
       onNavigate?.("/dashboard");
-    } catch (err) {
-      setError(
-        err?.message || "Could not sign in. Check your details and try again.",
-      );
+    } catch (error) {
+      setError(error?.message || "Google sign-in failed. Please try again.");
     } finally {
       setLoading(null);
     }
   };
 
-  const validateProfile = () => {
-    if (!profile.firstName.trim()) return "Enter your first name.";
-    if (!profile.lastName.trim()) return "Enter your last name.";
-    if (profile.phone.replace(/\D/g, "").length < 7)
-      return "Enter a valid phone number.";
-    if (!profile.employeeId.trim()) return "Enter your employee ID.";
-    if (!profile.college) return "Select your college.";
-    return "";
-  };
-
-  const handleGoogle = async () => {
+  const handlePasswordLogin = async (event) => {
+    event.preventDefault();
     setError("");
-    setNotice("");
-
-    if (isSignup) {
-      const problem = validateProfile();
-      if (problem) {
-        setError(problem);
-        return;
-      }
-    }
 
     try {
-      setLoading("google");
-      await onGoogle?.(
-        isSignup
-          ? {
-              mode,
-              profile: {
-                firstName: profile.firstName.trim(),
-                middleName: profile.middleName.trim(),
-                lastName: profile.lastName.trim(),
-                phone: profile.phone.trim(),
-                employeeId: profile.employeeId.trim(),
-                college: profile.college,
-              },
-            }
-          : { mode },
-      );
-
-      if (isSignup) {
-        setNotice(
-          "Account request sent. You can sign in once an administrator approves it.",
-        );
-      } else {
-        onNavigate?.("/dashboard");
-      }
-    } catch (err) {
-      setError(err?.message || "Google sign-in failed. Please try again.");
+      setLoading("password");
+      await onEmailPassword({
+        mode: "signin",
+        email: email.trim().toLowerCase(),
+        password,
+      });
+      onNavigate?.("/dashboard");
+    } catch (error) {
+      setError(error?.message || "Email sign-in failed. Please try again.");
     } finally {
       setLoading(null);
     }
   };
+
+  const googleButton = busy ? (
+    <div className="flex items-center justify-center gap-2 text-xs text-blue-700">
+      <Loader2 className="w-4 h-4 animate-spin" />
+      Verifying Google account...
+    </div>
+  ) : (
+    <GoogleLogin
+      onSuccess={handleGoogleSuccess}
+      onError={() => setError("Google sign-in failed. Please try again.")}
+      text="signin_with"
+      theme="filled_blue"
+      size="large"
+      shape="rectangular"
+      containerProps={{ className: "w-full flex justify-center" }}
+    />
+  );
 
   return (
     <main className="h-screen w-full overflow-y-auto bg-slate-100 select-none">
@@ -376,7 +275,7 @@ export default function Login({ onLogin, onGoogle, onNavigate }) {
               </h1>
               <p className="text-xs text-slate-500">
                 {isSignup
-                  ? "Fill in your details, then continue with Google. An administrator approves new accounts."
+                  ? "Create your account with email and password, or continue with Google."
                   : "Sign in to the Command Center."}
               </p>
             </div>
@@ -409,202 +308,66 @@ export default function Login({ onLogin, onGoogle, onNavigate }) {
                 <span className="text-xs font-medium">{error}</span>
               </div>
             )}
-            {notice && (
-              <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl p-3">
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span className="text-xs font-medium">{notice}</span>
-              </div>
-            )}
-
             {isSignup ? (
-              /* ----- Create account ----- */
-              <div className="flex flex-col gap-3.5">
-                <div className="grid grid-cols-2 gap-3">
-                  <Field id="firstName" label="First name" icon={User}>
-                    <input
-                      id="firstName"
-                      type="text"
-                      autoComplete="given-name"
-                      value={profile.firstName}
-                      onChange={setField("firstName")}
-                      placeholder="Juan"
-                      className={`${inputBase} pl-10 pr-3`}
-                    />
-                  </Field>
-                  <Field id="middleName" label="Middle name" optional>
-                    <input
-                      id="middleName"
-                      type="text"
-                      autoComplete="additional-name"
-                      value={profile.middleName}
-                      onChange={setField("middleName")}
-                      placeholder="Santos"
-                      className={`${inputBase} px-3`}
-                    />
-                  </Field>
-                </div>
-
-                <Field id="lastName" label="Last name">
-                  <input
-                    id="lastName"
-                    type="text"
-                    autoComplete="family-name"
-                    value={profile.lastName}
-                    onChange={setField("lastName")}
-                    placeholder="Dela Cruz"
-                    className={`${inputBase} px-3`}
-                  />
-                </Field>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Field id="phone" label="Phone number" icon={Phone}>
-                    <input
-                      id="phone"
-                      type="tel"
-                      autoComplete="tel"
-                      value={profile.phone}
-                      onChange={setPhone}
-                      placeholder="0917 123 4567"
-                      className={`${inputBase} pl-10 pr-3`}
-                    />
-                  </Field>
-                  <Field id="employeeId" label="Employee ID" icon={BadgeCheck}>
-                    <input
-                      id="employeeId"
-                      type="text"
-                      value={profile.employeeId}
-                      onChange={setField("employeeId")}
-                      placeholder="EMP-0001"
-                      className={`${inputBase} pl-10 pr-3`}
-                    />
-                  </Field>
-                </div>
-
-                <Field id="college" label="College" icon={Building2}>
-                  <select
-                    id="college"
-                    value={profile.college}
-                    onChange={setField("college")}
-                    className={`${inputBase} pl-10 pr-3`}
-                  >
-                    <option value="">Select your college</option>
-                    {COLLEGES.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
-                <button
-                  type="button"
-                  onClick={handleGoogle}
-                  disabled={busy}
-                  className="w-full flex items-center justify-center gap-2.5 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
-                >
-                  {loading === "google" ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <span className="w-6 h-6 rounded-full bg-white flex items-center justify-center">
-                      <GoogleIcon />
-                    </span>
-                  )}
-                  Create account with Google
-                </button>
-              </div>
+              <Signup
+                onGoogleSignup={({ credential, profile }) =>
+                  onGoogle({ mode: "signup", credential, profile })
+                }
+                onEmailSignup={({ email, password, profile }) =>
+                  onEmailPassword({ mode: "signup", email, password, profile })
+                }
+              />
             ) : (
-              /* ----- Sign in ----- */
               <div className="flex flex-col gap-4">
+                <p className="text-xs text-slate-500">
+                  Sign in with your admin email and password, or use Google.
+                </p>
                 <form
-                  onSubmit={handleEmailLogin}
-                  className="flex flex-col gap-4"
+                  className="flex flex-col gap-3"
+                  onSubmit={handlePasswordLogin}
                 >
-                  <Field id="email" label="Email" icon={Mail}>
-                    <input
-                      id="email"
-                      type="email"
-                      autoComplete="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="name@school.edu"
-                      className={`${inputBase} pl-10 pr-3`}
-                    />
-                  </Field>
-
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between">
-                      <label
-                        htmlFor="password"
-                        className="text-xs font-semibold text-slate-700"
-                      >
-                        Password
-                      </label>
-                      <button
-                        type="button"
-                        className="text-[11px] font-semibold text-blue-600 hover:underline"
-                      >
-                        Forgot password?
-                      </button>
-                    </div>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        id="password"
-                        type={showPw ? "text" : "password"}
-                        autoComplete="current-password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Enter your password"
-                        className={`${inputBase} pl-10 pr-10`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPw((v) => !v)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                        aria-label={showPw ? "Hide password" : "Show password"}
-                      >
-                        {showPw ? (
-                          <EyeOff className="w-4 h-4" />
-                        ) : (
-                          <Eye className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
+                  <input
+                    type="email"
+                    autoComplete="email"
+                    required
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="Email address"
+                    aria-label="Email address"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    placeholder="Password"
+                    aria-label="Password"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                  />
                   <button
                     type="submit"
                     disabled={busy}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
+                    className="w-full rounded-xl bg-blue-600 py-3 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {loading === "email" && (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    )}
-                    Sign in
+                    {loading === "password" ? "Signing in..." : "Sign in"}
                   </button>
                 </form>
-
-                <div className="flex items-center gap-3">
-                  <div className="h-px flex-1 bg-slate-200" />
-                  <span className="text-[11px] text-slate-400 font-medium">
-                    or
-                  </span>
-                  <div className="h-px flex-1 bg-slate-200" />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleGoogle}
-                  disabled={busy}
-                  className="w-full flex items-center justify-center gap-2.5 px-4 py-3 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-xl text-xs font-semibold transition-colors disabled:opacity-60"
-                >
-                  {loading === "google" ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <GoogleIcon />
-                  )}
-                  Continue with Google
-                </button>
+                {import.meta.env.VITE_GOOGLE_CLIENT_ID ? (
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-3 text-[10px] text-slate-400">
+                      <span className="h-px flex-1 bg-slate-200" />
+                      OR CONTINUE WITH GOOGLE
+                      <span className="h-px flex-1 bg-slate-200" />
+                    </div>
+                    {googleButton}
+                  </div>
+                ) : (
+                  <p className="text-center text-[11px] text-slate-400">
+                    Google sign-in is unavailable.
+                  </p>
+                )}
               </div>
             )}
 

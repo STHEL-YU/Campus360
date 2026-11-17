@@ -164,6 +164,82 @@ async function handleLatest(req, res) {
   }
 }
 
+async function handleAdminManage(req, res) {
+  if (!["GET", "DELETE"].includes(req.method)) {
+    res.setHeader("Allow", "GET, DELETE");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (req.headers["x-campus360-admin"] !== "1") {
+    return res.status(403).json({ error: "Invalid admin request" });
+  }
+
+  let adminId;
+  try {
+    adminId = getAdminSessionAdminId(req);
+  } catch (error) {
+    console.error("Admin session validation failed", error);
+    return res.status(500).json({ error: "Admin session is not configured" });
+  }
+  if (!adminId) {
+    return res.status(401).json({ error: "Admin sign-in is required" });
+  }
+
+  try {
+    const admin = await findActiveAdminById(adminId);
+    if (!admin) {
+      clearAdminSessionCookie(res);
+      return res.status(401).json({ error: "Admin sign-in is required" });
+    }
+
+    if (req.method === "GET") {
+      const result = await pool.query(
+        `SELECT id, title, message, college, alert_time, created_at
+         FROM alerts
+         ORDER BY created_at DESC, id DESC`,
+      );
+
+      res.setHeader("Cache-Control", "private, no-store");
+      return res.status(200).json({
+        alerts: result.rows.map((row) => ({
+          id: String(row.id),
+          title: row.title,
+          message: row.message,
+          college: row.college,
+          alertTime: resolveAlertTime(row.alert_time, row.created_at),
+          createdAt: new Date(row.created_at).toISOString(),
+        })),
+      });
+    }
+
+    const id = req.body?.id;
+    if (
+      (typeof id !== "string" && typeof id !== "number") ||
+      !/^[1-9]\d*$/.test(String(id))
+    ) {
+      return res.status(400).json({ error: "A valid alert ID is required" });
+    }
+
+    const result = await pool.query(
+      "DELETE FROM alerts WHERE id = $1 RETURNING id",
+      [String(id)],
+    );
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: "Alert not found" });
+    }
+
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).json({ deletedId: String(result.rows[0].id) });
+  } catch (error) {
+    console.error("Admin alert management request failed", error);
+    return res.status(500).json({
+      error:
+        req.method === "GET"
+          ? "Unable to load alerts"
+          : "Unable to delete alert",
+    });
+  }
+}
+
 async function handleStudentLatest(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -219,6 +295,7 @@ async function handleStudentLatest(req, res) {
 const ACTION_HANDLERS = {
   ingest: handleIngest,
   latest: handleLatest,
+  manage: handleAdminManage,
   "student-latest": handleStudentLatest,
 };
 

@@ -13,6 +13,7 @@ import {
 import AdminDashboard from "./pages/admins/dashboard.jsx";
 import CampusMonitoring from "./pages/admins/reportsmap.jsx";
 import Announcement from "./pages/admins/announcement.jsx";
+import AlertManagement from "./pages/admins/alerts.jsx";
 import UserManagement from "./pages/admins/usersmanagement.jsx";
 import AdminProfile from "./pages/admins/profile.jsx";
 import AdminLogin from "./pages/admins/auth/login.jsx";
@@ -510,6 +511,7 @@ export default function App() {
           <Route path="/dashboard" element={<AdminDashboardRoute />} />
           <Route path="/report" element={<CampusMonitoring />} />
           <Route path="/news" element={<Announcement />} />
+          <Route path="/alerts" element={<AlertManagement />} />
           <Route path="/users" element={<UserManagement />} />
           <Route path="/profile" element={<AdminProfile />} />
         </Route>

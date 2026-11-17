@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   User,
   Loader2,
+  Bell
 } from "lucide-react";
 import { getAdminProfile, signOut } from "../../auth";
 
@@ -34,6 +35,7 @@ export default function Sidebar() {
     { name: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
     { name: "Campus Monitoring", icon: Map, path: "/report" },
     { name: "News & Announcements", icon: Newspaper, path: "/news" },
+    { name: "Alert Management", icon: Bell, path: "/alerts" },
     { name: "User Management", icon: Users, path: "/users" },
     { name: "My Profile", icon: User, path: "/profile" },
   ];

@@ -78,6 +78,44 @@ function pickRecorderMimeType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
 }
 
+async function preparePhoto(file) {
+  const imageUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const photo = new Image();
+      photo.onload = () => resolve(photo);
+      photo.onerror = () => reject(new Error("Unable to read the photo."));
+      photo.src = imageUrl;
+    });
+    const scale = Math.min(
+      1,
+      MAX_PHOTO_DIMENSION / Math.max(image.width, image.height),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.width * scale);
+    canvas.height = Math.round(image.height * scale);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Unable to process the photo.");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    let blob = null;
+    for (const quality of [0.85, 0.75, 0.65]) {
+      blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", quality),
+      );
+      if (blob && blob.size <= MAX_IMAGE_SIZE) break;
+    }
+    if (!blob || blob.size > MAX_IMAGE_SIZE) {
+      throw new Error("The photo is too large to attach. Try another photo.");
+    }
+    return new File([blob], `photo-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+    });
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
+}
+
 const formatClock = (seconds) => {
   const whole = Math.floor(seconds);
   return `0:${String(whole).padStart(2, "0")}`;
@@ -96,6 +134,7 @@ export default function ReportIncident() {
   const [evidenceError, setEvidenceError] = useState("");
   const [imagePreview, setImagePreview] = useState(null);
   const [audioPreview, setAudioPreview] = useState(null);
+  const photoInputRef = useRef(null);
 
   // Camera + voice recording
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -139,7 +178,6 @@ export default function ReportIncident() {
     recordStreamRef.current = null;
   };
 
-  // Turn the camera on while the camera screen is open, off when it closes
   useEffect(() => {
     if (!isCameraOpen) return undefined;
     let cancelled = false;
@@ -185,8 +223,8 @@ export default function ReportIncident() {
         recorder.onstop = null;
         if (recorder.state !== "inactive") recorder.stop();
       }
-      stopRecordStream();
       stopCameraStream();
+      stopRecordStream();
     },
     [],
   );
@@ -229,15 +267,17 @@ export default function ReportIncident() {
   const openCamera = () => {
     setEvidenceError("");
     setSubmitError("");
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setEvidenceError(
-        "The camera is not available on this device or browser.",
-      );
+
+    // Phones and tablets: open the device's own camera app
+    const isTouchDevice = window.matchMedia?.("(pointer: coarse)").matches;
+    if (isTouchDevice || !navigator.mediaDevices?.getUserMedia) {
+      photoInputRef.current?.click();
       return;
     }
+
+    // Computers: use the webcam screen
     setIsCameraOpen(true);
   };
-
   const closeCamera = () => setIsCameraOpen(false);
 
   const capturePhoto = () => {
@@ -247,7 +287,6 @@ export default function ReportIncident() {
       return;
     }
 
-    // Shrink large photos so they stay under the 3 MB limit
     const scale = Math.min(
       1,
       MAX_PHOTO_DIMENSION / Math.max(video.videoWidth, video.videoHeight),
@@ -255,7 +294,12 @@ export default function ReportIncident() {
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(video.videoWidth * scale);
     canvas.height = Math.round(video.videoHeight * scale);
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      setEvidenceError("Unable to take the photo. Try again.");
+      return;
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     canvas.toBlob(
       (blob) => {
@@ -263,15 +307,30 @@ export default function ReportIncident() {
           setEvidenceError("Unable to take the photo. Try again.");
           return;
         }
-        const file = new File([blob], `photo-${Date.now()}.jpg`, {
-          type: "image/jpeg",
-        });
-        setEvidenceFile("image", file);
+        setEvidenceFile(
+          "image",
+          new File([blob], `photo-${Date.now()}.jpg`, {
+            type: "image/jpeg",
+          }),
+        );
         setIsCameraOpen(false);
       },
       "image/jpeg",
       0.85,
     );
+  };
+
+  const handlePhotoInput = async (event) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+
+    try {
+      setEvidenceFile("image", await preparePhoto(file));
+    } catch (error) {
+      setEvidenceError(error.message || "Unable to process the photo.");
+    }
   };
 
   const removePhoto = () => {
@@ -682,6 +741,16 @@ export default function ReportIncident() {
             <div className="grid grid-cols-2 gap-3">
               {/* Take photo */}
               <div>
+                <input
+                  ref={photoInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoInput}
+                  disabled={isRecording}
+                  className="hidden"
+                  aria-label="Take or choose a photo"
+                />
                 <button
                   type="button"
                   onClick={openCamera}
@@ -849,7 +918,6 @@ export default function ReportIncident() {
         </form>
       </main>
 
-      {/* Camera screen: live preview with a capture button */}
       {isCameraOpen && (
         <div
           role="dialog"
@@ -877,10 +945,12 @@ export default function ReportIncident() {
             <button
               type="button"
               onClick={capturePhoto}
-              aria-label="Take photo"
-              className="h-16 w-16 rounded-full border-4 border-white bg-white/30 active:bg-white/60"
-            />
-            <span className="w-12" />
+              aria-label="Take picture"
+              className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-white/30 active:bg-white/60"
+            >
+              <Camera className="h-7 w-7 text-white" />
+            </button>
+            <span className="w-12" aria-hidden="true" />
           </div>
         </div>
       )}

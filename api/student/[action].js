@@ -64,6 +64,10 @@ const INCIDENT_CATEGORIES = {
   security: "Security Concern",
   medical: "Medical Emergency",
   other: "Other Issue",
+  shooting: "Shooting",
+  fire: "Fire",
+  "threat/violence": "Threat/Violence",
+  bullying: "Bullying",
 };
 
 // Blob token: set BLOB_READ_WRITE_TOKEN in your environment, never in frontend code.
@@ -287,7 +291,8 @@ function parseIncidentReport(body) {
   }
 
   const category =
-    typeof body.category === "string"
+    typeof body.category === "string" &&
+    Object.hasOwn(INCIDENT_CATEGORIES, body.category)
       ? INCIDENT_CATEGORIES[body.category]
       : null;
   if (!category) {

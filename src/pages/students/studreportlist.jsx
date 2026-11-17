@@ -23,6 +23,10 @@ const CATEGORY_OPTIONS = [
   { value: "security", label: "Security Concern" },
   { value: "medical", label: "Medical Emergency" },
   { value: "other", label: "Other Issue" },
+  { value: "shooting", label: "Shooting" },
+  { value: "fire", label: "Fire" },
+  { value: "threat/violence", label: "Threat/Violence" },
+  { value: "bullying", label: "Bullying" },
 ];
 
 const inputClass =

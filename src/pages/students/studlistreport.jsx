@@ -1,94 +1,118 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AlertTriangle,
-  Clock,
-  MapPin,
   CheckCircle2,
-  ChevronRight,
+  Clock,
   FileText,
+  LoaderCircle,
+  MapPin,
 } from "lucide-react";
 
-export default function ReportsList({ onViewReport }) {
+const FILTERS = ["All", "Active", "Resolved"];
+
+function getStatusStyle(status) {
+  switch (status.toLowerCase()) {
+    case "resolved":
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    case "in review":
+      return "bg-blue-50 text-blue-700 border-blue-200";
+    case "active":
+      return "bg-amber-50 text-amber-700 border-amber-200";
+    default:
+      return "bg-slate-100 text-slate-700 border-slate-200";
+  }
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Date unavailable"
+    : date.toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+}
+
+export default function ReportsList() {
   const [activeFilter, setActiveFilter] = useState("All");
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
-  // Sample data representing student-submitted incident reports
-  const reportsData = [
-    {
-      id: "REP-2024-089",
-      category: "Facility Maintenance",
-      college: "College of Engineering",
-      building: "Engineering Building B",
-      location: "2nd floor, Room 214",
-      timestamp: "Today, 10:15 AM",
-      description:
-        "Leaking ceiling pipe near the main hallway causing a slippery floor hazard.",
-      status: "In Review",
-      statusColor: "bg-blue-50 text-blue-700 border-blue-200",
-      indicatorColor: "bg-blue-500",
-      borderLeft: "border-l-4 border-blue-500",
-    },
-    {
-      id: "REP-2024-084",
-      category: "Safety Hazard",
-      college: "College of Arts & Sciences",
-      building: "Science Annex",
-      location: "Ground floor laboratory",
-      timestamp: "Yesterday, 3:40 PM",
-      description:
-        "Flickering emergency exit light and blocked fire extinguisher cabinet.",
-      status: "Active",
-      statusColor: "bg-amber-50 text-amber-700 border-amber-200",
-      indicatorColor: "bg-amber-500",
-      borderLeft: "border-l-4 border-amber-400",
-    },
-    {
-      id: "REP-2024-072",
-      category: "Security Concern",
-      college: "College of Nursing",
-      building: "Main Administration",
-      location: "West wing entrance",
-      timestamp: "October 12, 1:20 PM",
-      description:
-        "Exterior automated sliding door sensor failing to detect movement.",
-      status: "Resolved",
-      statusColor: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      indicatorColor: "bg-emerald-500",
-      borderLeft: "border-l-4 border-emerald-500",
-    },
-  ];
+  useEffect(() => {
+    const controller = new AbortController();
 
-  const filteredReports = reportsData.filter((report) => {
-    if (activeFilter === "Active") return report.status !== "Resolved";
-    if (activeFilter === "Resolved") return report.status === "Resolved";
+    async function loadReports() {
+      setIsLoading(true);
+      setError("");
+      try {
+        const response = await fetch("/api/student/report", {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to load your reports.");
+        }
+        if (!Array.isArray(result.reports)) {
+          throw new Error("The server returned an invalid report list.");
+        }
+        setReports(result.reports);
+      } catch (requestError) {
+        if (requestError.name !== "AbortError") {
+          setError(requestError.message || "Unable to load your reports.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+
+    loadReports();
+    return () => controller.abort();
+  }, [reloadKey]);
+
+  const filteredReports = reports.filter((report) => {
+    if (activeFilter === "Active") {
+      return report.status.toLowerCase() !== "resolved";
+    }
+    if (activeFilter === "Resolved") {
+      return report.status.toLowerCase() === "resolved";
+    }
     return true;
   });
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-32">
-      {/* Main Container */}
-      <main className="px-5 pt-4 max-w-md mx-auto space-y-6">
-        {/* Header Section */}
+      <main className="mx-auto max-w-md space-y-6 px-5 pt-4">
         <div className="flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold tracking-wider text-blue-600 uppercase">
               Incident Management
             </span>
-            <h1 className="text-2xl font-extrabold text-slate-900 mt-0.5">
+            <h1 className="mt-0.5 text-2xl font-extrabold text-slate-900">
               My reports
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="mt-0.5 text-xs text-slate-500">
               Track and view status of submitted reports
             </p>
           </div>
+          <Link
+            to="/student/report"
+            className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700"
+          >
+            New report
+          </Link>
         </div>
 
-        {/* Filter Tabs */}
-        <div className="flex bg-slate-200/70 p-1 rounded-2xl">
-          {["All", "Active", "Resolved"].map((tab) => (
+        <div className="flex rounded-2xl bg-slate-200/70 p-1">
+          {FILTERS.map((tab) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setActiveFilter(tab)}
-              className={`flex-1 py-2 text-xs font-bold rounded-xl transition-all ${
+              className={`flex-1 rounded-xl py-2 text-xs font-bold transition-all ${
                 activeFilter === tab
                   ? "bg-white text-slate-900 shadow-sm"
                   : "text-slate-500 hover:text-slate-800"
@@ -99,70 +123,122 @@ export default function ReportsList({ onViewReport }) {
           ))}
         </div>
 
-        {/* Reports Feed */}
-        <div className="space-y-4">
-          {filteredReports.map((report) => (
-            <div
-              key={report.id}
-              className={`bg-white rounded-2xl p-4 ${report.borderLeft} border border-slate-100 shadow-sm relative overflow-hidden`}
+        {error && (
+          <div
+            role="alert"
+            className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-700"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <p>{error}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReloadKey((key) => key + 1)}
+              className="mt-3 font-semibold underline"
             >
-              {/* Top Row: Ticket ID & Timestamp */}
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-400">
-                  {report.id}
-                </span>
-                <span className="text-[11px] text-slate-400 flex items-center space-x-1">
-                  <Clock className="w-3 h-3" />
-                  <span>{report.timestamp}</span>
-                </span>
-              </div>
+              Try again
+            </button>
+          </div>
+        )}
 
-              {/* Category */}
-              <h3 className="text-base font-bold text-slate-900 mt-1">
-                {report.category}
-              </h3>
-
-              {/* Location Tag */}
-              <div className="flex items-center space-x-1.5 text-xs text-slate-500 mt-1">
-                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <span className="font-semibold">
-                  {report.building} · {report.location}
-                </span>
-              </div>
-
-              {/* Description */}
-              <p className="text-xs text-slate-600 mt-2 leading-relaxed">
-                {report.description}
-              </p>
-
-              {/* Bottom Footer: Status Badge & View Action */}
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
-                <span
-                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-semibold border ${report.statusColor}`}
+        {isLoading ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-xs text-slate-500">
+            <LoaderCircle className="h-4 w-4 animate-spin" />
+            Loading your reports...
+          </div>
+        ) : !error && filteredReports.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-12 text-center">
+            <FileText className="mx-auto h-8 w-8 text-slate-300" />
+            <p className="mt-3 text-sm font-semibold text-slate-700">
+              No reports found
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Submitted reports will appear here so you can track their status.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredReports.map((report) => {
+              const isResolved = report.status.toLowerCase() === "resolved";
+              return (
+                <article
+                  key={report.id}
+                  className="relative overflow-hidden rounded-2xl border border-slate-100 border-l-4 border-l-blue-500 bg-white p-4 shadow-sm"
                 >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${report.indicatorColor} mr-1.5`}
-                  />
-                  {report.status}
-                </span>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] font-bold text-slate-400">
+                      {report.reportNumber}
+                    </span>
+                    <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                      <Clock className="h-3 w-3" />
+                      {formatDate(report.submittedAt)}
+                    </span>
+                  </div>
 
-                <button
-                  onClick={() => onViewReport && onViewReport(report.id)}
-                  className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center space-x-0.5 group"
-                >
-                  <span>Details</span>
-                  <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-                </button>
-              </div>
-            </div>
-          ))}
+                  <h2 className="mt-1 text-base font-bold text-slate-900">
+                    {report.category}
+                  </h2>
+                  <div className="mt-1 flex items-start gap-1.5 text-xs text-slate-500">
+                    <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    <span>
+                      <strong className="font-semibold">{report.building}</strong>
+                      {report.location ? ` · ${report.location}` : ""}
+                    </span>
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                    {report.description || "No description provided."}
+                  </p>
+                  <p className="mt-2 text-[11px] text-slate-400">
+                    {report.college}
+                    {report.pin
+                      ? ` · Map pin ${report.pin.x}%, ${report.pin.y}%`
+                      : ""}
+                  </p>
 
-          {filteredReports.length === 0 && (
-            <div className="text-center py-12 text-slate-400 text-xs">
-              No incident reports found in this category.
-            </div>
-          )}
-        </div>
+                  {(report.imageUrl || report.audioUrl) && (
+                    <div className="mt-3 space-y-2">
+                      {report.imageUrl && (
+                        <img
+                          src={report.imageUrl}
+                          alt={`Evidence for ${report.reportNumber}`}
+                          loading="lazy"
+                          className="max-h-56 w-full rounded-xl object-cover"
+                        />
+                      )}
+                      {report.audioUrl && (
+                        <audio
+                          controls
+                          preload="none"
+                          src={report.audioUrl}
+                          className="w-full"
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                    <span
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold ${getStatusStyle(
+                        report.status,
+                      )}`}
+                    >
+                      {isResolved ? (
+                        <CheckCircle2 className="h-3 w-3" />
+                      ) : (
+                        <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                      )}
+                      {report.status}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {report.anonymous ? "Identity hidden" : "Identity shared"}
+                    </span>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </main>
     </div>
   );

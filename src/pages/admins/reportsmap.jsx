@@ -1,9 +1,7 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  AlertCircle,
   AlertTriangle,
   FileText,
-  ShieldAlert,
   Bell,
   Clock,
   CheckCircle2,
@@ -18,23 +16,35 @@ import {
   Hash,
 } from "lucide-react";
 
-const placeholderImage = (label, from, to) =>
-  `data:image/svg+xml;utf8,${encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' width='640' height='360'>` +
-      `<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>` +
-      `<stop offset='0' stop-color='${from}'/><stop offset='1' stop-color='${to}'/>` +
-      `</linearGradient></defs>` +
-      `<rect width='640' height='360' fill='url(#g)'/>` +
-      `<text x='320' y='185' font-family='sans-serif' font-size='22' fill='white' text-anchor='middle'>${label}</text>` +
-      `</svg>`,
-  )}`;
+// Set to false to use your real map at /campus-map.png
+const USE_DUMMY_MAP = true;
 
-const minutesAgo = (m) => Date.now() - m * 60 * 1000;
+const DUMMY_MAP_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#dcfce7"/>
+  <rect x="0" y="270" width="800" height="60" fill="#e2e8f0"/>
+  <rect x="370" y="0" width="60" height="600" fill="#e2e8f0"/>
+  <rect x="60" y="60" width="240" height="150" rx="10" fill="#93c5fd"/>
+  <text x="180" y="143" font-size="24" text-anchor="middle" fill="#1e3a8a" font-family="Arial">Engineering</text>
+  <rect x="500" y="60" width="240" height="150" rx="10" fill="#fca5a5"/>
+  <text x="620" y="143" font-size="24" text-anchor="middle" fill="#7f1d1d" font-family="Arial">Library</text>
+  <rect x="60" y="390" width="240" height="150" rx="10" fill="#fde68a"/>
+  <text x="180" y="473" font-size="24" text-anchor="middle" fill="#78350f" font-family="Arial">Admin</text>
+  <rect x="500" y="390" width="240" height="150" rx="10" fill="#c4b5fd"/>
+  <text x="620" y="473" font-size="24" text-anchor="middle" fill="#4c1d95" font-family="Arial">Gymnasium</text>
+  <circle cx="400" cy="300" r="22" fill="#86efac" stroke="#16a34a" stroke-width="4"/>
+  <text x="400" y="585" font-size="18" text-anchor="middle" fill="#475569" font-family="Arial">DUMMY TEST MAP</text>
+</svg>`;
+
+const MAP_SRC = USE_DUMMY_MAP
+  ? `data:image/svg+xml;utf8,${encodeURIComponent(DUMMY_MAP_SVG)}`
+  : "/campus-map.png";
 
 const isToday = (ms) =>
   new Date(ms).toDateString() === new Date().toDateString();
 
 const timeAgo = (ms) => {
+  if (!Number.isFinite(ms)) return "Date unavailable";
   const mins = Math.floor((Date.now() - ms) / 60000);
   if (mins < 1) return "Just now";
   if (mins < 60) return `${mins} min ago`;
@@ -49,81 +59,81 @@ const timeAgo = (ms) => {
 
 const STATUS_ORDER = { New: 0, Pending: 1, Resolved: 2, Declined: 3 };
 
+function normalizeReportStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "resolved") return "Resolved";
+  if (["pending", "active", "in review"].includes(normalized)) {
+    return "Pending";
+  }
+  if (["declined", "rejected"].includes(normalized)) return "Declined";
+  return "New";
+}
+
 export default function CampusMonitoring() {
-  const [reports, setReports] = useState([
-    {
-      id: 1,
-      title: "University-wide",
-      subtitle: "All campus locations",
-      desc: "Shelter-in-place advisory",
-      status: "Pending",
-      reportedAt: minutesAgo(10),
-      image: placeholderImage(
-        "Shelter-in-place advisory",
-        "#475569",
-        "#1e293b",
-      ),
-    },
-    {
-      id: 2,
-      title: "Engineering Building B",
-      subtitle: "Restricted access",
-      desc: "",
-      status: "Pending",
-      reportedAt: minutesAgo(25),
-      image: placeholderImage("Restricted access area", "#b45309", "#78350f"),
-    },
-    {
-      id: 3,
-      title: "University Library",
-      subtitle: "Suspicious person report",
-      desc: "",
-      status: "New",
-      reportedAt: minutesAgo(0),
-      image: placeholderImage("Library entrance", "#2563eb", "#1e3a8a"),
-    },
-    {
-      id: 4,
-      title: "Science Hall",
-      subtitle: "Broken emergency light",
-      desc: "2nd floor stairwell",
-      status: "New",
-      reportedAt: minutesAgo(5),
-      image: placeholderImage("Science Hall stairwell", "#0d9488", "#134e4a"),
-    },
-    {
-      id: 5,
-      title: "Business School",
-      subtitle: "Unattended bag",
-      desc: "Main lobby",
-      status: "New",
-      reportedAt: minutesAgo(12),
-      image: placeholderImage("Main lobby", "#7c3aed", "#4c1d95"),
-    },
-    {
-      id: 6,
-      title: "Parking Lot C",
-      subtitle: "Vehicle break-in",
-      desc: "Security notified",
-      status: "Resolved",
-      reportedAt: minutesAgo(120),
-      image: placeholderImage("Parking Lot C", "#16a34a", "#14532d"),
-    },
-    {
-      id: 7,
-      title: "Gymnasium",
-      subtitle: "Wet floor hazard",
-      desc: "",
-      status: "Resolved",
-      reportedAt: minutesAgo(1500),
-      image: placeholderImage("Gymnasium floor", "#0891b2", "#164e63"),
-    },
-  ]);
+  // pin = { x: 0-100, y: 0-100 } as % of the map image (null = no pin)
+  const [reports, setReports] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [statusFilter, setStatusFilter] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedId, setSelectedId] = useState(null); 
-  const [confirm, setConfirm] = useState(null); 
+  const [selectedId, setSelectedId] = useState(null);
+  const [imageLoadFailed, setImageLoadFailed] = useState({});
+  const [confirm, setConfirm] = useState(null);
+  const [mapError, setMapError] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadReports() {
+      setIsLoading(true);
+      setLoadError("");
+      try {
+        const response = await fetch("/api/student/admin-reports", {
+          credentials: "same-origin",
+          headers: { "X-Campus360-Admin": "1" },
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to load incident reports.");
+        }
+        if (!Array.isArray(result.reports)) {
+          throw new Error("The server returned an invalid report list.");
+        }
+
+        setReports(
+          result.reports.map((report) => ({
+            id: report.id,
+            reportNumber: report.reportNumber,
+            title: report.building || report.college || "Campus report",
+            subtitle: report.category || "Incident report",
+            desc: report.description || "",
+            location: report.location || "",
+            college: report.college || "",
+            status: normalizeReportStatus(report.status),
+            reportedAt: new Date(report.submittedAt).getTime(),
+            pin: report.pin,
+            hasImage: report.hasImage,
+            hasAudio: report.hasAudio,
+            image: report.imageUrl,
+            audio: report.audioUrl,
+            anonymous: report.anonymous,
+          })),
+        );
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setLoadError(error.message || "Unable to load incident reports.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+
+    loadReports();
+    return () => controller.abort();
+  }, [reloadKey]);
 
   // Derived data
   const countBy = (status) => reports.filter((r) => r.status === status).length;
@@ -154,7 +164,7 @@ export default function CampusMonitoring() {
   const selectedReport = reports.find((r) => r.id === selectedId) || null;
   const confirmReport = reports.find((r) => r.id === confirm?.id) || null;
 
-  // Actions 
+  // Actions
   const setStatus = (id, status) => {
     setReports((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
   };
@@ -174,7 +184,7 @@ export default function CampusMonitoring() {
     setConfirm(null);
   };
 
-  //  Styles 
+  //  Styles
   const statusStyles = {
     New: {
       badge: "bg-blue-50 text-blue-700 border-blue-200/60",
@@ -233,58 +243,44 @@ export default function CampusMonitoring() {
     },
   ];
 
-  //  Map pins 
-  const renderPin = (reportId, Icon, positionClass, bounce = false) => {
-    const report = reports.find((r) => r.id === reportId);
-    if (!report) return null;
+  //  Map pins (positioned by % of the image)
+  const renderPin = (report) => {
+    if (!report.pin) return null;
 
     const isActive = report.status === "New" || report.status === "Pending";
 
     return (
-      <button
-        key={reportId}
-        onClick={() => setSelectedId(reportId)}
-        aria-label={`View report: ${report.title}`}
-        title={`${report.title} – ${report.status}`}
-        className={`absolute ${positionClass} w-8 h-8 ${statusStyles[report.status].dot} text-white rounded-full flex items-center justify-center shadow-md transition-transform ${
-          bounce && isActive ? "animate-bounce" : "hover:scale-110"
-        } ${selectedId === reportId ? "ring-4 ring-white" : ""}`}
+      // Outer wrapper handles positioning; inner button handles the bounce
+      <div
+        key={report.id}
+        className={`absolute ${selectedId === report.id ? "z-30" : "z-20"}`}
+        style={{
+          left: `${report.pin.x}%`,
+          top: `${report.pin.y}%`,
+          transform: "translate(-50%, -50%)",
+        }}
       >
-        <Icon className="w-4 h-4" />
-      </button>
+        {selectedId === report.id && (
+          <span className="absolute bottom-full left-1/2 mb-1 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 text-[10px] font-semibold text-white shadow-lg">
+            {report.reportNumber || report.subtitle}
+          </span>
+        )}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setSelectedId(report.id);
+          }}
+          aria-label={`View report: ${report.title}`}
+          title={`${report.title} – ${report.status}`}
+          className={`w-8 h-8 ${statusStyles[report.status].dot} text-white rounded-full flex items-center justify-center shadow-md border-2 border-white transition-transform ${
+            isActive ? "animate-bounce" : "hover:scale-110"
+          } ${selectedId === report.id ? "ring-4 ring-white" : ""}`}
+        >
+          <MapPin className="w-4 h-4" />
+        </button>
+      </div>
     );
   };
-
-  const buildings = [
-    {
-      code: "ENG",
-      name: "Engineering",
-      reportId: 2,
-      Icon: AlertCircle,
-      pos: "-bottom-4 right-6",
-    },
-    {
-      code: "LIB",
-      name: "University Library",
-      reportId: 3,
-      Icon: FileText,
-      pos: "-bottom-4 left-6",
-    },
-    {
-      code: "SCI",
-      name: "Science Hall",
-      reportId: 4,
-      Icon: FileText,
-      pos: "-bottom-4 right-6",
-    },
-    {
-      code: "BUS",
-      name: "Business School",
-      reportId: 5,
-      Icon: FileText,
-      pos: "-bottom-4 left-6",
-    },
-  ];
 
   return (
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none font-sans">
@@ -345,8 +341,8 @@ export default function CampusMonitoring() {
 
         {/* Main Grid Layout */}
         <div className="grid grid-cols-3 gap-6 items-start">
-          {/* Map Simulation Panel */}
-          <div className="col-span-2 bg-[#eaf0eb] rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-2xs relative overflow-hidden min-h-[640px]">
+          {/* Map Panel */}
+          <div className="col-span-2 bg-[#eaf0eb] rounded-2xl border border-slate-200 p-6 flex flex-col gap-4 shadow-2xs relative overflow-hidden">
             {/* Map Header details */}
             <div className="flex items-center justify-between z-10 bg-white/80 backdrop-blur-md px-4 py-3 rounded-xl border border-slate-200/60 shadow-2xs">
               <div>
@@ -372,24 +368,43 @@ export default function CampusMonitoring() {
               </div>
             </div>
 
-            {/* Map Grid Buildings Layout */}
-            <div className="grid grid-cols-2 gap-12 my-auto relative p-6">
-              {buildings.map((b) => (
-                <div
-                  key={b.code}
-                  className="bg-white rounded-2xl p-5 border border-slate-200 shadow-lg relative flex flex-col items-center justify-center h-28"
-                >
-                  <span className="text-lg font-bold text-slate-900 tracking-wider">
-                    {b.code}
-                  </span>
-                  <span className="text-[11px] text-slate-400 font-medium">
-                    {b.name}
-                  </span>
-                  {renderPin(b.reportId, b.Icon, b.pos)}
-                </div>
-              ))}
+            {/* Image map: the container wraps the image exactly (no fixed
+                height / cropping) so the pin percentages match the image */}
+            <div
+              className={`relative w-full rounded-2xl overflow-hidden border border-slate-200 bg-slate-100 ${
+                mapError ? "h-96" : ""
+              }`}
+              style={
+                mapError
+                  ? {
+                      backgroundImage:
+                        "linear-gradient(#cbd5e1 1px, transparent 1px), linear-gradient(90deg, #cbd5e1 1px, transparent 1px)",
+                      backgroundSize: "24px 24px",
+                    }
+                  : undefined
+              }
+            >
+              {!mapError && (
+                <img
+                  src={MAP_SRC}
+                  alt="Campus map"
+                  draggable={false}
+                  onError={() => setMapError(true)}
+                  className="block w-full h-auto select-none pointer-events-none"
+                />
+              )}
 
-              {renderPin(1, ShieldAlert, "top-[48%] left-[46%] z-20", true)}
+              {reports.map((report) => renderPin(report))}
+              {isLoading && (
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-600 shadow">
+                  Loading submitted reports...
+                </div>
+              )}
+              {loadError && (
+                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 shadow">
+                  Report pins could not be loaded
+                </div>
+              )}
             </div>
 
             {/* Map Legend Footer */}
@@ -407,7 +422,6 @@ export default function CampusMonitoring() {
 
           {/* All Reports & Responder Status */}
           <div className="flex flex-col gap-6">
-
             <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs">
               <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
                 <div>
@@ -456,7 +470,25 @@ export default function CampusMonitoring() {
               </div>
 
               <div className="flex flex-col gap-3 max-h-[520px] overflow-y-auto pr-1">
-                {visibleReports.map((report) => {
+                {isLoading ? (
+                  <div className="py-10 text-center text-xs text-slate-500">
+                    Loading submitted reports...
+                  </div>
+                ) : loadError ? (
+                  <div
+                    role="alert"
+                    className="py-6 text-center text-xs text-rose-700"
+                  >
+                    <p>{loadError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setReloadKey((key) => key + 1)}
+                      className="mt-2 font-semibold underline"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : visibleReports.map((report) => {
                   const s = statusStyles[report.status];
 
                   return (
@@ -485,6 +517,17 @@ export default function CampusMonitoring() {
                       <div className="text-[11px] text-slate-500">
                         {report.subtitle}
                       </div>
+                      <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
+                        <MapPin className="h-3 w-3" />
+                        {report.pin
+                          ? `Map pin: ${report.pin.x}%, ${report.pin.y}%`
+                          : "No map pin saved"}
+                      </div>
+                      {report.location && (
+                        <div className="text-[11px] text-slate-500">
+                          {report.location}
+                        </div>
+                      )}
                       {report.desc && (
                         <div className="text-[11px] text-slate-400 font-medium">
                           {report.desc}
@@ -538,7 +581,7 @@ export default function CampusMonitoring() {
                   );
                 })}
 
-                {visibleReports.length === 0 && (
+                {!isLoading && !loadError && visibleReports.length === 0 && (
                   <div className="py-10 text-center text-xs text-slate-400 font-medium">
                     {query
                       ? "No reports match your search."
@@ -612,17 +655,37 @@ export default function CampusMonitoring() {
             </div>
 
             {/* Report image */}
-            {selectedReport.image ? (
+            {selectedReport.image && !imageLoadFailed[selectedReport.id] ? (
               <img
                 src={selectedReport.image}
                 alt={`Photo for report: ${selectedReport.subtitle}`}
                 className="w-full h-52 object-cover rounded-xl border border-slate-200"
+                onError={() =>
+                  setImageLoadFailed((previous) => ({
+                    ...previous,
+                    [selectedReport.id]: true,
+                  }))
+                }
               />
             ) : (
               <div className="w-full h-52 rounded-xl bg-slate-100 border border-slate-200 flex flex-col items-center justify-center gap-2 text-slate-400">
                 <ImageIcon className="w-8 h-8" />
-                <span className="text-xs font-medium">No image attached</span>
+                <span className="text-xs font-medium">
+                  {imageLoadFailed[selectedReport.id]
+                    ? "Unable to load attached photo"
+                    : selectedReport.hasImage
+                      ? "Photo evidence is attached"
+                      : "No image attached"}
+                </span>
               </div>
+            )}
+            {selectedReport.audio && (
+              <audio
+                controls
+                preload="none"
+                src={selectedReport.audio}
+                className="w-full"
+              />
             )}
 
             <div className="grid grid-cols-2 gap-4">
@@ -632,6 +695,9 @@ export default function CampusMonitoring() {
                 </span>
                 <span className="text-xs font-semibold text-slate-800">
                   {selectedReport.title}
+                  {selectedReport.location
+                    ? ` · ${selectedReport.location}`
+                    : ""}
                 </span>
               </div>
               <div className="flex flex-col gap-1">
@@ -655,9 +721,21 @@ export default function CampusMonitoring() {
                   <Hash className="w-3 h-3" /> Report ID
                 </span>
                 <span className="text-xs font-semibold text-slate-800">
-                  RPT-{String(selectedReport.id).slice(-4).padStart(4, "0")}
+                  {selectedReport.reportNumber ||
+                    `RPT-${String(selectedReport.id).slice(-4).padStart(4, "0")}`}
                 </span>
               </div>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <MapPin className="w-3 h-3" /> Map pin
+              </span>
+              <span className="text-xs font-semibold text-slate-800">
+                {selectedReport.pin
+                  ? `x: ${selectedReport.pin.x}%, y: ${selectedReport.pin.y}%`
+                  : "No map pin was saved for this report"}
+              </span>
             </div>
 
             <div className="flex flex-col gap-1.5">

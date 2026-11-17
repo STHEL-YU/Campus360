@@ -1,28 +1,161 @@
-import React, { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import {
-  ChevronLeft,
-  Bell,
   Shield,
   Upload,
   Mic,
-  AlertCircle,
-  CheckCircle,
   MapPin,
+  LoaderCircle,
+  X,
 } from "lucide-react";
+import { getStudentProfile } from "../../auth";
 
-export default function ReportIncident({ onBack }) {
-  const [formData, setFormData] = useState({
-    category: "",
-    college: "College of Engineering",
-    building: "Engineering Building",
-    location: "",
-    pin: null, // { x: 0-100, y: 0-100 } as % of the map image
-    description: "",
-    anonymous: true,
-  });
+// Set to false to use your real map at /campus-map.png
+const USE_DUMMY_MAP = true;
 
-  const [submitted, setSubmitted] = useState(false);
+const DUMMY_MAP_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="#dcfce7"/>
+  <rect x="0" y="270" width="800" height="60" fill="#e2e8f0"/>
+  <rect x="370" y="0" width="60" height="600" fill="#e2e8f0"/>
+  <rect x="60" y="60" width="240" height="150" rx="10" fill="#93c5fd"/>
+  <text x="180" y="143" font-size="24" text-anchor="middle" fill="#1e3a8a" font-family="Arial">Engineering</text>
+  <rect x="500" y="60" width="240" height="150" rx="10" fill="#fca5a5"/>
+  <text x="620" y="143" font-size="24" text-anchor="middle" fill="#7f1d1d" font-family="Arial">Library</text>
+  <rect x="60" y="390" width="240" height="150" rx="10" fill="#fde68a"/>
+  <text x="180" y="473" font-size="24" text-anchor="middle" fill="#78350f" font-family="Arial">Admin</text>
+  <rect x="500" y="390" width="240" height="150" rx="10" fill="#c4b5fd"/>
+  <text x="620" y="473" font-size="24" text-anchor="middle" fill="#4c1d95" font-family="Arial">Gymnasium</text>
+  <circle cx="400" cy="300" r="22" fill="#86efac" stroke="#16a34a" stroke-width="4"/>
+  <text x="400" y="585" font-size="18" text-anchor="middle" fill="#475569" font-family="Arial">DUMMY TEST MAP</text>
+</svg>`;
+
+const MAP_SRC = USE_DUMMY_MAP
+  ? `data:image/svg+xml;utf8,${encodeURIComponent(DUMMY_MAP_SVG)}`
+  : "/campus-map.png";
+
+const INITIAL_FORM_DATA = {
+  category: "",
+  college: "College of Engineering",
+  building: "Engineering Building",
+  location: "",
+  pin: null,
+  description: "",
+  anonymous: true,
+};
+const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
+const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"];
+const ALLOWED_AUDIO_TYPES = [
+  "audio/webm",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/wav",
+  "audio/x-wav",
+];
+const AUDIO_EXTENSIONS = {
+  "audio/webm": "webm",
+  "audio/ogg": "ogg",
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/wav": "wav",
+  "audio/x-wav": "wav",
+};
+
+export default function ReportIncident() {
+  const navigate = useNavigate();
+  const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
+  const [imageFile, setImageFile] = useState(null);
+  const [audioFile, setAudioFile] = useState(null);
   const [mapError, setMapError] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [evidenceError, setEvidenceError] = useState("");
+  const imageInputRef = useRef(null);
+  const audioInputRef = useRef(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [audioPreview, setAudioPreview] = useState(null);
+
+  useEffect(
+    () => () => {
+      if (imagePreview) URL.revokeObjectURL(imagePreview);
+    },
+    [imagePreview],
+  );
+  useEffect(
+    () => () => {
+      if (audioPreview) URL.revokeObjectURL(audioPreview);
+    },
+    [audioPreview],
+  );
+
+  const setEvidenceFile = (kind, file) => {
+    if (!file) return;
+    const allowedTypes =
+      kind === "image" ? ALLOWED_IMAGE_TYPES : ALLOWED_AUDIO_TYPES;
+    const maxSize = kind === "image" ? MAX_IMAGE_SIZE : MAX_AUDIO_SIZE;
+    if (!allowedTypes.includes(file.type)) {
+      setEvidenceError(
+        kind === "image"
+          ? "Choose a JPG or PNG image."
+          : "Choose a supported audio file.",
+      );
+      if (kind === "image" && imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+      if (kind === "audio" && audioInputRef.current) {
+        audioInputRef.current.value = "";
+      }
+      return;
+    }
+    if (file.size <= 0 || file.size > maxSize) {
+      setEvidenceError(
+        kind === "image"
+          ? "Images must be smaller than 3 MB."
+          : "Audio files must be smaller than 10 MB.",
+      );
+      if (kind === "image" && imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+      if (kind === "audio" && audioInputRef.current) {
+        audioInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setEvidenceError("");
+    setSubmitError("");
+    if (kind === "image") {
+      setImageFile(file);
+      setImagePreview(URL.createObjectURL(file));
+    } else {
+      setAudioFile(file);
+      setAudioPreview(URL.createObjectURL(file));
+    }
+  };
+
+  const uploadEvidence = async (file, kind, studentId) => {
+    if (!file) return null;
+    const extension =
+      kind === "image"
+        ? file.type === "image/png"
+          ? "png"
+          : "jpg"
+        : AUDIO_EXTENSIONS[file.type];
+    if (!extension) throw new Error("This evidence file format is not supported.");
+
+    const { upload } = await import("@vercel/blob/client");
+    const blob = await upload(
+      `incident-reports/${studentId}/${kind}/${crypto.randomUUID()}.${extension}`,
+      file,
+      {
+        access: "private",
+        handleUploadUrl: "/api/student/report-upload",
+      },
+    );
+    return blob.pathname;
+  };
 
   const handleMapClick = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -34,37 +167,60 @@ export default function ReportIncident({ onBack }) {
     });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // TODO: Connect to your API or backend submission logic
-    setSubmitted(true);
-  };
+    if (isSubmitting) return;
+    if (evidenceError) {
+      setSubmitError(evidenceError);
+      return;
+    }
 
-  if (submitted) {
-    return (
-      <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col items-center justify-center p-6 text-center pb-28">
-        <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-4 shadow-sm">
-          <CheckCircle className="w-8 h-8" />
-        </div>
-        <h2 className="text-xl font-bold text-slate-900">
-          Report Submitted Successfully
-        </h2>
-        <p className="text-xs text-slate-500 mt-1 max-w-xs">
-          Your safety report has been securely sent to authorized campus
-          personnel. Thank you for keeping our community safe.
-        </p>
-        <button
-          onClick={() => {
-            setSubmitted(false);
-            if (onBack) onBack();
-          }}
-          className="mt-6 px-6 py-2.5 bg-blue-600 text-white text-xs font-semibold rounded-xl shadow-md hover:bg-blue-700 transition-colors"
-        >
-          Back to Dashboard
-        </button>
-      </div>
-    );
-  }
+    setIsSubmitting(true);
+    setSubmitError("");
+    try {
+      let imagePath = null;
+      let audioPath = null;
+      if (imageFile || audioFile) {
+        const student = getStudentProfile();
+        if (!student?.id) {
+          throw new Error("Please sign in again before uploading report evidence.");
+        }
+        [imagePath, audioPath] = await Promise.all([
+          uploadEvidence(imageFile, "image", student.id),
+          uploadEvidence(audioFile, "audio", student.id),
+        ]);
+      }
+
+      const response = await fetch("/api/student/report", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...formData, imagePath, audioPath }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to submit incident report.");
+      }
+      if (!result.report?.id) {
+        throw new Error("The server returned an invalid incident report.");
+      }
+
+      setFormData({ ...INITIAL_FORM_DATA });
+      setImageFile(null);
+      setAudioFile(null);
+      setImagePreview(null);
+      setAudioPreview(null);
+      setEvidenceError("");
+      if (imageInputRef.current) imageInputRef.current.value = "";
+      if (audioInputRef.current) audioInputRef.current.value = "";
+      navigate("/student/alerts", { replace: true });
+    } catch (error) {
+      setSubmitError(error.message || "Unable to submit incident report.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-32">
@@ -85,7 +241,24 @@ export default function ReportIncident({ onBack }) {
           </div>
         </div>
 
+        <Link
+          to="/student/alerts"
+          className="mb-5 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700"
+        >
+          <span>Track my submitted reports</span>
+          <span className="text-blue-600">My reports →</span>
+        </Link>
+
         <form onSubmit={handleSubmit} className="space-y-5">
+          {submitError && (
+            <p
+              role="alert"
+              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+            >
+              {submitError}
+            </p>
+          )}
+
           {/* Incident Category */}
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-700">
@@ -195,9 +368,13 @@ export default function ReportIncident({ onBack }) {
               )}
             </div>
 
+            {/* Container wraps the image exactly (no fixed height / cropping)
+                so the pin percentages always match the image */}
             <div
               onClick={handleMapClick}
-              className="relative w-full h-56 rounded-2xl overflow-hidden border border-slate-200 shadow-sm cursor-crosshair bg-slate-100"
+              className={`relative w-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm cursor-crosshair bg-slate-100 ${
+                mapError ? "h-56" : ""
+              }`}
               style={
                 mapError
                   ? {
@@ -210,11 +387,11 @@ export default function ReportIncident({ onBack }) {
             >
               {!mapError && (
                 <img
-                  src="/campus-map.png"
+                  src={MAP_SRC}
                   alt="Campus map"
                   draggable={false}
                   onError={() => setMapError(true)}
-                  className="w-full h-full object-cover select-none pointer-events-none"
+                  className="block w-full h-auto select-none pointer-events-none"
                 />
               )}
 
@@ -247,6 +424,13 @@ export default function ReportIncident({ onBack }) {
                 ? "Pin placed. Tap another spot to move it."
                 : "Mark the exact spot where the incident happened."}
             </p>
+
+            {/* Test only: shows the saved coordinates */}
+            {USE_DUMMY_MAP && formData.pin && (
+              <p className="text-[11px] font-mono font-semibold text-slate-600">
+                x: {formData.pin.x}%, y: {formData.pin.y}%
+              </p>
+            )}
           </div>
 
           {/* Add Evidence Section */}
@@ -257,37 +441,109 @@ export default function ReportIncident({ onBack }) {
             </label>
             <div className="grid grid-cols-2 gap-3">
               {/* Add Photo Box */}
-              <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
-                <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
-                  <Upload className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-slate-700">
-                  Add photo
-                </span>
-                <span className="text-[10px] text-slate-400 mt-0.5">
-                  JPG or PNG
-                </span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png"
-                  className="hidden"
-                />
-              </label>
+              <div>
+                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
+                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <span className="text-xs font-bold text-slate-700">
+                    Add photo
+                  </span>
+                  <span className="text-[10px] text-slate-400 mt-0.5">
+                    JPG or PNG
+                  </span>
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept={ALLOWED_IMAGE_TYPES.join(",")}
+                    className="hidden"
+                    onChange={(e) =>
+                      setEvidenceFile("image", e.target.files?.[0])
+                    }
+                  />
+                </label>
+                {imageFile && (
+                  <div className="mt-2 space-y-2">
+                    <img
+                      src={imagePreview}
+                      alt="Selected report evidence"
+                      className="h-24 w-full rounded-lg object-cover"
+                    />
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                      <span className="truncate">{imageFile.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImageFile(null);
+                          setImagePreview(null);
+                          setEvidenceError("");
+                          setSubmitError("");
+                          if (imageInputRef.current) {
+                            imageInputRef.current.value = "";
+                          }
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 font-semibold text-rose-600"
+                      >
+                        <X className="h-3 w-3" /> Remove
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Voice Message Box */}
-              <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
-                <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
-                  <Mic className="w-5 h-5" />
-                </div>
-                <span className="text-xs font-bold text-slate-700">
-                  Voice message
-                </span>
-                <span className="text-[10px] text-slate-400 mt-0.5">
-                  Record or upload
-                </span>
-                <input type="file" accept="audio/*" className="hidden" />
-              </label>
+              <div>
+                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
+                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
+                    <Mic className="w-5 h-5" />
+                  </div>
+                  <span className="text-xs font-bold text-slate-700">
+                    Voice message
+                  </span>
+                  <span className="text-[10px] text-slate-400 mt-0.5">
+                    Upload audio
+                  </span>
+                  <input
+                    ref={audioInputRef}
+                    type="file"
+                    accept={ALLOWED_AUDIO_TYPES.join(",")}
+                    className="hidden"
+                    onChange={(e) => setEvidenceFile("audio", e.target.files?.[0])}
+                  />
+                </label>
+                {audioFile && (
+                  <div className="mt-2 space-y-2">
+                    <audio
+                      controls
+                      preload="metadata"
+                      src={audioPreview}
+                      className="w-full"
+                    />
+                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
+                      <span className="truncate">{audioFile.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAudioFile(null);
+                          setAudioPreview(null);
+                          setEvidenceError("");
+                          setSubmitError("");
+                          if (audioInputRef.current) audioInputRef.current.value = "";
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 font-semibold text-rose-600"
+                      >
+                        <X className="h-3 w-3" /> Remove
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
+            {evidenceError && (
+              <p role="alert" className="text-[11px] text-rose-600">
+                {evidenceError}
+              </p>
+            )}
           </div>
 
           {/* Description */}
@@ -322,17 +578,28 @@ export default function ReportIncident({ onBack }) {
               htmlFor="anonymous"
               className="text-xs font-medium text-slate-700 select-none"
             >
-              Do not display my identity to other users.
+              Keep my identity anonymous in shared report views.
             </label>
           </div>
+          <p className="text-[11px] text-slate-400 -mt-4 ml-6">
+            Authorized staff can still identify you to follow up.
+          </p>
 
           {/* Submit Button */}
           <div className="pt-2">
             <button
               type="submit"
-              className="w-full bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white text-sm font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-red-500/25 transition-all active:scale-[0.99]"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+              className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 disabled:opacity-70 disabled:cursor-not-allowed text-white text-sm font-bold py-3.5 px-4 rounded-2xl shadow-lg shadow-red-500/25 transition-all active:scale-[0.99]"
             >
-              Submit safety report
+              {isSubmitting && (
+                <LoaderCircle
+                  className="h-4 w-4 animate-spin"
+                  aria-hidden="true"
+                />
+              )}
+              {isSubmitting ? "Submitting..." : "Submit safety report"}
             </button>
             <p className="text-[11px] text-slate-400 text-center mt-3">
               In immediate life-threatening danger, contact local emergency

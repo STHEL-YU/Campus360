@@ -4,11 +4,16 @@ import { BlobNotFoundError, get, head } from "@vercel/blob";
 import { handleUpload } from "@vercel/blob/client";
 import {
   deleteStudentForAdmin,
+  createIncidentReport,
+  findIncidentReportEvidenceForStudent,
   findActiveAdminById,
+  findIncidentReportEvidenceForAdmin,
   findStudentIdImageForAdmin,
   findStudentProfileById,
   createStudentRegistration,
   findStudentForLogin,
+  listIncidentReportsForAdmin,
+  listIncidentReportsForStudent,
   listStudentsForAdmin,
   updateStudentForAdmin,
   updateStudentProfileImage,
@@ -26,11 +31,31 @@ import { hashPassword, verifyPassword } from "../passwords.js";
 
 const MAX_SCHOOL_ID_SIZE = 5 * 1024 * 1024;
 const MAX_PROFILE_IMAGE_SIZE = 2 * 1024 * 1024;
+const MAX_REPORT_IMAGE_SIZE = 3 * 1024 * 1024;
+const MAX_REPORT_AUDIO_SIZE = 10 * 1024 * 1024;
 const SCHOOL_ID_CONTENT_TYPES = ["image/jpeg", "image/png"];
 const PROFILE_IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png"];
+const REPORT_IMAGE_CONTENT_TYPES = ["image/jpeg", "image/png"];
+const REPORT_AUDIO_CONTENT_TYPES = [
+  "audio/webm",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/wav",
+  "audio/x-wav",
+];
+const REPORT_EVIDENCE_PATH_PATTERN =
+  /^incident-reports\/([1-9]\d*)\/(image|audio)\/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webm|ogg|mp3|m4a|wav)$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_STATUSES = new Set(["active", "blocked", "inactive", "pending"]);
 const IMAGE_PATH_PATTERN = /^student-id\/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png)$/i;
+const INCIDENT_CATEGORIES = {
+  safety: "Safety Hazard",
+  maintenance: "Facility Maintenance",
+  security: "Security Concern",
+  medical: "Medical Emergency",
+  other: "Other Issue",
+};
 
 // Blob token: set BLOB_READ_WRITE_TOKEN in your environment, never in frontend code.
 //   Local:  .env.local  ->  BLOB_READ_WRITE_TOKEN="vercel_blob_rw_xxxxxxxx"
@@ -71,6 +96,33 @@ function parseId(value) {
 
   const id = String(value);
   return /^[1-9]\d*$/.test(id) ? id : null;
+}
+
+function isOwnedReportEvidencePath(pathname, studentId, kind) {
+  if (typeof pathname !== "string") return false;
+  const match = REPORT_EVIDENCE_PATH_PATTERN.exec(pathname);
+  if (!match || match[1] !== String(studentId) || match[2] !== kind) {
+    return false;
+  }
+
+  const extension = match[3].toLowerCase();
+  return kind === "image"
+    ? ["jpg", "jpeg", "png"].includes(extension)
+    : ["webm", "ogg", "mp3", "m4a", "wav"].includes(extension);
+}
+
+async function verifyReportEvidence(pathname, contentTypes, maxSize) {
+  try {
+    const blob = await head(pathname, { access: "private", ...blobAuth });
+    return (
+      contentTypes.includes(blob.contentType) &&
+      blob.size > 0 &&
+      blob.size <= maxSize
+    );
+  } catch (error) {
+    if (error instanceof BlobNotFoundError) return false;
+    throw error;
+  }
 }
 
 function getStudentUpdates(body) {
@@ -217,6 +269,465 @@ async function handleAdminStudents(req, res) {
 
     console.error("Student management request failed", error);
     return res.status(500).json({ error: "Unable to manage student accounts" });
+  }
+}
+
+function parseIncidentReport(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "A JSON request body is required" };
+  }
+
+  const category =
+    typeof body.category === "string"
+      ? INCIDENT_CATEGORIES[body.category]
+      : null;
+  if (!category) {
+    return { error: "Select a valid incident category" };
+  }
+
+  if (
+    !isNonEmptyString(body.college) ||
+    body.college.trim().length > 200 ||
+    !isNonEmptyString(body.building) ||
+    body.building.trim().length > 200
+  ) {
+    return { error: "Enter a valid college and building" };
+  }
+  if (
+    (body.location !== undefined &&
+      (typeof body.location !== "string" || body.location.length > 200)) ||
+    (body.description !== undefined &&
+      (typeof body.description !== "string" || body.description.length > 10000))
+  ) {
+    return { error: "Location or description is too long" };
+  }
+  if (typeof body.anonymous !== "boolean") {
+    return { error: "Choose whether to hide your identity" };
+  }
+
+  let pinX = null;
+  let pinY = null;
+  if (body.pin !== null && body.pin !== undefined) {
+    if (
+      !body.pin ||
+      typeof body.pin !== "object" ||
+      Array.isArray(body.pin) ||
+      typeof body.pin.x !== "number" ||
+      typeof body.pin.y !== "number" ||
+      !Number.isFinite(body.pin.x) ||
+      !Number.isFinite(body.pin.y) ||
+      body.pin.x < 0 ||
+      body.pin.x > 100 ||
+      body.pin.y < 0 ||
+      body.pin.y > 100
+    ) {
+      return { error: "Choose a valid location on the map" };
+    }
+
+    pinX = body.pin.x;
+    pinY = body.pin.y;
+  }
+
+  return {
+    report: {
+      category,
+      college: body.college.trim(),
+      building: body.building.trim(),
+      location: body.location?.trim() || "",
+      description: body.description?.trim() || "",
+      pinX,
+      pinY,
+      isAnonymous: body.anonymous,
+    },
+  };
+}
+
+function serializeIncidentReport(report) {
+  const submittedAt = new Date(report.created_at).toISOString();
+  return {
+    id: String(report.id),
+    reportNumber: `REP-${new Date(report.created_at).getUTCFullYear()}-${String(
+      report.id,
+    ).padStart(6, "0")}`,
+    category: report.category,
+    college: report.college,
+    building: report.building,
+    location: report.location,
+    description: report.description,
+    status: report.status,
+    submittedAt,
+    pin:
+      report.pin_x === null
+        ? null
+        : { x: Number(report.pin_x), y: Number(report.pin_y) },
+    anonymous: report.is_anonymous,
+    imageUrl: report.image_path
+      ? `/api/student/report-evidence?id=${encodeURIComponent(
+          String(report.id),
+        )}&kind=image`
+      : null,
+    audioUrl: report.audio_path
+      ? `/api/student/report-evidence?id=${encodeURIComponent(
+          String(report.id),
+        )}&kind=audio`
+      : null,
+  };
+}
+
+async function handleStudentIncidentReport(req, res) {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  let studentId;
+  try {
+    studentId = getStudentSessionId(req);
+  } catch (error) {
+    console.error("Student session validation failed", error);
+    return res.status(500).json({ error: "Student session is not configured" });
+  }
+  if (!studentId) {
+    return res.status(401).json({ error: "Student sign-in is required" });
+  }
+
+  try {
+    const student = await findStudentProfileById(studentId);
+    if (!student || student.status.toLowerCase() !== "active") {
+      clearStudentSessionCookie(res);
+      return res.status(401).json({ error: "Student sign-in is required" });
+    }
+
+    res.setHeader("Cache-Control", "private, no-store");
+    if (req.method === "GET") {
+      const reports = await listIncidentReportsForStudent(studentId);
+      return res.status(200).json({
+        reports: reports.map(serializeIncidentReport),
+      });
+    }
+
+    const { report, error } = parseIncidentReport(req.body);
+    if (error) return res.status(400).json({ error });
+
+    const imagePath = req.body.imagePath ?? null;
+    const audioPath = req.body.audioPath ?? null;
+    if (
+      (imagePath !== null &&
+        !isOwnedReportEvidencePath(imagePath, studentId, "image")) ||
+      (audioPath !== null &&
+        !isOwnedReportEvidencePath(audioPath, studentId, "audio"))
+    ) {
+      return res.status(400).json({ error: "Invalid report evidence" });
+    }
+    if (imagePath || audioPath) {
+      if (!BLOB_TOKEN) {
+        console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
+        return res
+          .status(503)
+          .json({ error: "Report evidence storage is unavailable" });
+      }
+
+      const evidenceIsValid = await Promise.all([
+        imagePath
+          ? verifyReportEvidence(
+              imagePath,
+              REPORT_IMAGE_CONTENT_TYPES,
+              MAX_REPORT_IMAGE_SIZE,
+            )
+          : true,
+        audioPath
+          ? verifyReportEvidence(
+              audioPath,
+              REPORT_AUDIO_CONTENT_TYPES,
+              MAX_REPORT_AUDIO_SIZE,
+            )
+          : true,
+      ]);
+      if (evidenceIsValid.includes(false)) {
+        return res.status(400).json({
+          error: "Report evidence is missing or has an unsupported format",
+        });
+      }
+    }
+
+    const created = await createIncidentReport({
+      studentId,
+      ...report,
+      imagePath,
+      audioPath,
+    });
+    if (!created) {
+      throw new Error("Incident report was not created");
+    }
+
+    return res.status(201).json({
+      report: serializeIncidentReport(created),
+    });
+  } catch (error) {
+    console.error("Student incident report submission failed", error);
+    return res.status(500).json({ error: "Unable to submit incident report" });
+  }
+}
+
+async function handleStudentReportEvidence(req, res) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  let studentId;
+  try {
+    studentId = getStudentSessionId(req);
+  } catch (error) {
+    console.error("Student session validation failed", error);
+    return res.status(500).json({ error: "Student session is not configured" });
+  }
+  if (!studentId) {
+    return res.status(401).json({ error: "Student sign-in is required" });
+  }
+
+  const reportId = parseId(req.query.id);
+  const kind = req.query.kind;
+  if (!reportId || (kind !== "image" && kind !== "audio")) {
+    return res
+      .status(400)
+      .json({ error: "A valid report evidence reference is required" });
+  }
+  if (!BLOB_TOKEN) {
+    console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
+    return res.status(503).json({ error: "Report evidence storage is unavailable" });
+  }
+
+  try {
+    const student = await findStudentProfileById(studentId);
+    if (!student || student.status.toLowerCase() !== "active") {
+      clearStudentSessionCookie(res);
+      return res.status(401).json({ error: "Student sign-in is required" });
+    }
+
+    const report = await findIncidentReportEvidenceForStudent(
+      reportId,
+      studentId,
+    );
+    const pathname = kind === "image" ? report?.image_path : report?.audio_path;
+    const contentTypes =
+      kind === "image" ? REPORT_IMAGE_CONTENT_TYPES : REPORT_AUDIO_CONTENT_TYPES;
+    const maxSize =
+      kind === "image" ? MAX_REPORT_IMAGE_SIZE : MAX_REPORT_AUDIO_SIZE;
+    if (
+      !pathname ||
+      !isOwnedReportEvidencePath(pathname, studentId, kind)
+    ) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+
+    const evidence = await get(pathname, { access: "private", ...blobAuth });
+    if (
+      !evidence ||
+      !contentTypes.includes(evidence.blob.contentType) ||
+      evidence.blob.size <= 0 ||
+      evidence.blob.size > maxSize
+    ) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+
+    res.setHeader("Content-Type", evidence.blob.contentType);
+    res.setHeader("Content-Length", String(evidence.blob.size));
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    const stream = Readable.fromWeb(evidence.stream);
+    stream.on("error", (error) => {
+      console.error("Student report evidence stream failed", error);
+      res.destroy(error);
+    });
+    stream.pipe(res);
+  } catch (error) {
+    if (error instanceof BlobNotFoundError) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+    console.error("Student report evidence request failed", error);
+    return res.status(500).json({ error: "Unable to load report evidence" });
+  }
+}
+
+function serializeAdminIncidentReport(report) {
+  const submittedAt = new Date(report.created_at).toISOString();
+  return {
+    id: String(report.id),
+    reportNumber: `REP-${new Date(report.created_at).getUTCFullYear()}-${String(
+      report.id,
+    ).padStart(6, "0")}`,
+    category: report.category,
+    college: report.college,
+    building: report.building,
+    location: report.location,
+    description: report.description,
+    status: report.status,
+    submittedAt,
+    pin:
+      report.pin_x === null
+        ? null
+        : { x: Number(report.pin_x), y: Number(report.pin_y) },
+    hasImage: Boolean(report.image_path),
+    hasAudio: Boolean(report.audio_path),
+    imageUrl: report.image_path
+      ? `/api/student/admin-report-evidence?id=${encodeURIComponent(
+          String(report.id),
+        )}&kind=image`
+      : null,
+    audioUrl: report.audio_path
+      ? `/api/student/admin-report-evidence?id=${encodeURIComponent(
+          String(report.id),
+        )}&kind=audio`
+      : null,
+    anonymous: report.is_anonymous,
+  };
+}
+
+async function handleAdminIncidentReports(req, res) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (req.headers["x-campus360-admin"] !== "1") {
+    return res.status(403).json({ error: "Invalid admin request" });
+  }
+
+  let adminId;
+  try {
+    adminId = getAdminSessionAdminId(req);
+  } catch (error) {
+    console.error("Admin session validation failed", error);
+    return res.status(500).json({ error: "Admin session is not configured" });
+  }
+  if (!adminId) {
+    return res.status(401).json({ error: "Admin sign-in is required" });
+  }
+
+  try {
+    const admin = await findActiveAdminById(adminId);
+    if (!admin) {
+      clearAdminSessionCookie(res);
+      return res.status(401).json({ error: "Admin sign-in is required" });
+    }
+    if (!isNonEmptyString(admin.college)) {
+      return res.status(403).json({ error: "Admin college is not configured" });
+    }
+
+    const reports = await listIncidentReportsForAdmin(admin.college);
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).json({
+      reports: reports.map(serializeAdminIncidentReport),
+      college: admin.college,
+    });
+  } catch (error) {
+    console.error("Admin incident reports request failed", error);
+    return res.status(500).json({ error: "Unable to load incident reports" });
+  }
+}
+
+async function handleAdminReportEvidence(req, res) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  const reportId = parseId(req.query.id);
+  const kind = req.query.kind;
+  if (!reportId || (kind !== "image" && kind !== "audio")) {
+    return res
+      .status(400)
+      .json({ error: "A valid report evidence reference is required" });
+  }
+
+  let adminId;
+  try {
+    adminId = getAdminSessionAdminId(req);
+  } catch (error) {
+    console.error("Admin session validation failed", error);
+    return res.status(500).json({ error: "Admin session is not configured" });
+  }
+  if (!adminId) {
+    return res.status(401).json({ error: "Admin sign-in is required" });
+  }
+
+  try {
+    const admin = await findActiveAdminById(adminId);
+    if (!admin) {
+      clearAdminSessionCookie(res);
+      return res.status(401).json({ error: "Admin sign-in is required" });
+    }
+    if (!isNonEmptyString(admin.college)) {
+      return res.status(403).json({ error: "Admin college is not configured" });
+    }
+    if (!BLOB_TOKEN) {
+      console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
+      return res.status(503).json({ error: "Report evidence is unavailable" });
+    }
+
+    const report = await findIncidentReportEvidenceForAdmin(
+      reportId,
+      admin.college,
+    );
+    const pathname = kind === "image" ? report?.image_path : report?.audio_path;
+    const contentTypes =
+      kind === "image" ? REPORT_IMAGE_CONTENT_TYPES : REPORT_AUDIO_CONTENT_TYPES;
+    const maxSize =
+      kind === "image" ? MAX_REPORT_IMAGE_SIZE : MAX_REPORT_AUDIO_SIZE;
+    const pathMatch =
+      typeof pathname === "string"
+        ? REPORT_EVIDENCE_PATH_PATTERN.exec(pathname)
+        : null;
+    const extension = pathMatch?.[3]?.toLowerCase();
+    const extensionMatchesKind =
+      kind === "image"
+        ? ["jpg", "jpeg", "png"].includes(extension)
+        : ["webm", "ogg", "mp3", "m4a", "wav"].includes(extension);
+    if (
+      !pathMatch ||
+      pathMatch[2].toLowerCase() !== kind ||
+      !extensionMatchesKind ||
+      !pathname
+    ) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+
+    const evidence = await get(pathname, {
+      access: "private",
+      token: BLOB_TOKEN,
+    });
+    if (
+      !evidence ||
+      evidence.statusCode !== 200 ||
+      !contentTypes.includes(evidence.blob.contentType) ||
+      evidence.blob.size <= 0 ||
+      evidence.blob.size > maxSize
+    ) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+
+    res.setHeader("Content-Type", evidence.blob.contentType);
+    res.setHeader("Content-Length", String(evidence.blob.size));
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    const stream = Readable.fromWeb(evidence.stream);
+    stream.on("error", (error) => {
+      console.error("Admin report evidence stream failed", error);
+      res.destroy(error);
+    });
+    stream.pipe(res);
+  } catch (error) {
+    if (error instanceof BlobNotFoundError) {
+      return res.status(404).json({ error: "Report evidence not found" });
+    }
+    console.error("Admin report evidence request failed", error);
+    return res.status(500).json({ error: "Unable to load report evidence" });
   }
 }
 
@@ -431,6 +942,73 @@ async function handleSchoolIdUpload(req, res) {
   }
 }
 
+async function handleReportEvidenceUpload(req, res) {
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (!BLOB_TOKEN) {
+    console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
+    return res.status(503).json({ error: "Report evidence storage is unavailable" });
+  }
+
+  let studentId;
+  try {
+    studentId = getStudentSessionId(req);
+  } catch (error) {
+    console.error("Student session validation failed", error);
+    return res.status(500).json({ error: "Student session is not configured" });
+  }
+  if (!studentId) {
+    return res.status(401).json({ error: "Student sign-in is required" });
+  }
+
+  try {
+    const student = await findStudentProfileById(studentId);
+    if (!student || student.status.toLowerCase() !== "active") {
+      clearStudentSessionCookie(res);
+      return res.status(401).json({ error: "Student sign-in is required" });
+    }
+
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      return res.status(400).json({ error: "A valid upload request is required" });
+    }
+
+    const result = await handleUpload({
+      ...blobAuth,
+      body: req.body,
+      request: req,
+      onBeforeGenerateToken: async (pathname) => {
+        const match =
+          typeof pathname === "string"
+            ? REPORT_EVIDENCE_PATH_PATTERN.exec(pathname)
+            : null;
+        if (!match || match[1] !== studentId) {
+          throw new Error("Invalid report evidence upload path");
+        }
+
+        const kind = match[2].toLowerCase();
+        return {
+          allowedContentTypes:
+            kind === "image"
+              ? REPORT_IMAGE_CONTENT_TYPES
+              : REPORT_AUDIO_CONTENT_TYPES,
+          maximumSizeInBytes:
+            kind === "image" ? MAX_REPORT_IMAGE_SIZE : MAX_REPORT_AUDIO_SIZE,
+          validUntil: Date.now() + 5 * 60 * 1000,
+        };
+      },
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Report evidence upload authorization failed", error);
+    return res
+      .status(400)
+      .json({ error: "Unable to authorize report evidence upload" });
+  }
+}
+
 async function handleLogin(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -586,6 +1164,10 @@ export default async function handler(req, res) {
     return handleSchoolIdUpload(req, res);
   }
 
+  if (action === "report-upload") {
+    return handleReportEvidenceUpload(req, res);
+  }
+
   if (action === "profile") {
     return handleProfileImageUpdate(req, res);
   }
@@ -598,8 +1180,24 @@ export default async function handler(req, res) {
     return handleAdminStudents(req, res);
   }
 
+  if (action === "admin-reports") {
+    return handleAdminIncidentReports(req, res);
+  }
+
+  if (action === "admin-report-evidence") {
+    return handleAdminReportEvidence(req, res);
+  }
+
   if (action === "admin-student-image") {
     return handleAdminStudentImage(req, res);
+  }
+
+  if (action === "report") {
+    return handleStudentIncidentReport(req, res);
+  }
+
+  if (action === "report-evidence") {
+    return handleStudentReportEvidence(req, res);
   }
 
   if (action !== "register") {

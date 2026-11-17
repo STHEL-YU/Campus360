@@ -1,53 +1,127 @@
-import React, { useState } from "react";
-import { Clock, ChevronRight, Bookmark } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Clock, ChevronRight } from "lucide-react";
+import { useLocation } from "react-router-dom";
+
+const NEWS_RECENCY_DAYS = 7;
+
+async function requestNews(signal) {
+  const response = await fetch("/api/news/feed", {
+    credentials: "same-origin",
+    signal,
+  });
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to load campus news.");
+  }
+  if (!Array.isArray(result.announcements)) {
+    throw new Error("The server returned an invalid news feed.");
+  }
+  return result.announcements;
+}
+
+function getCategoryLabel(type) {
+  if (type === "Campaign") return "SAFETY CAMPAIGN";
+  if (type === "Safety Advisory") return "SAFETY ADVISORY";
+  return "CAMPUS ANNOUNCEMENT";
+}
+
+function formatEventDateTime(value) {
+  return new Date(value).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
 
 export default function Announcement() {
+  const location = useLocation();
   const [activeFilter, setActiveFilter] = useState("All");
+  const [announcements, setAnnouncements] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [requestError, setRequestError] = useState("");
 
-  const newsData = [
-    {
-      id: 1,
-      category: "SAFETY CAMPAIGN · OCTOBER 14",
-      title: "Safety begins with all of us",
-      description:
-        "Join Campus Safety Week and learn practical emergency readiness skills.",
-      image:
-        "https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=600&auto=format&fit=crop&q=80",
-      type: "Announcements",
-    },
-    {
-      id: 2,
-      category: "UNIVERSITY NEWS · OCTOBER 12",
-      title: "New evening escort service begins Monday",
-      description:
-        "Students and faculty can request a security escort between campus buildings.",
-      image:
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600&auto=format&fit=crop&q=80",
-      type: "Advisories",
-    },
-    {
-      id: 3,
-      category: "SAFETY REMINDER · OCTOBER 10",
-      title: "Five ways to stay aware on campus",
-      description:
-        "Simple habits can help make our shared university spaces safer.",
-      image:
-        "https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=600&auto=format&fit=crop&q=80",
-      type: "Announcements",
-    },
-  ];
+  useEffect(() => {
+    const controller = new AbortController();
+    let requestInFlight = false;
 
-  const filteredNews = newsData.filter((item) => {
-    if (activeFilter === "Announcements") return item.type === "Announcements";
-    if (activeFilter === "Advisories") return item.type === "Advisories";
-    return true;
+    async function loadNews() {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const news = await requestNews(controller.signal);
+        setAnnouncements(news);
+        setRequestError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setRequestError(error.message || "Unable to load campus news.");
+        }
+      } finally {
+        requestInFlight = false;
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+
+    loadNews();
+    const refreshTimer = window.setInterval(loadNews, 15000);
+    window.addEventListener("focus", loadNews);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadNews);
+      controller.abort();
+    };
+  }, []);
+
+  const newsData = announcements.map((item) => {
+    const publishedDate = item.published || "";
+    const categoryDate = item.eventAt
+      ? new Date(item.eventAt).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+        })
+      : publishedDate;
+
+    return {
+      ...item,
+      category: `${getCategoryLabel(item.type)} · ${categoryDate}`.toUpperCase(),
+      description: item.content,
+      type:
+        item.type === "Safety Advisory"
+          ? "Advisories"
+          : item.type === "Campaign"
+            ? "Campaigns"
+            : "Announcements",
+    };
   });
+
+  const recentCutoff = new Date();
+  recentCutoff.setUTCHours(0, 0, 0, 0);
+  recentCutoff.setUTCDate(
+    recentCutoff.getUTCDate() - (NEWS_RECENCY_DAYS - 1),
+  );
+  const cutoffDate = recentCutoff.toISOString().slice(0, 10);
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const recentNews = newsData.filter(
+    (item) =>
+      typeof item.publishedAt === "string" &&
+      item.publishedAt >= cutoffDate &&
+      item.publishedAt <= todayDate,
+  );
+  const filteredNews = recentNews.filter((item) => {
+    return activeFilter === "All" || item.type === activeFilter;
+  });
+  const notificationId = location.state?.announcementId;
+
+  useEffect(() => {
+    if (!notificationId) return;
+    document
+      .getElementById(`announcement-${notificationId}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [notificationId, filteredNews.length]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-32">
-      {/* Main Container */}
       <main className="px-5 pt-4 max-w-md mx-auto space-y-6">
-        {/* Header Section */}
         <div>
           <span className="text-[11px] font-bold tracking-wider text-blue-600 uppercase">
             Campus Updates
@@ -56,13 +130,21 @@ export default function Announcement() {
             Campus news
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Stay informed with the latest announcements
+            Showing updates from the last {NEWS_RECENCY_DAYS} days
           </p>
         </div>
 
-        {/* Filter Pills */}
+        {requestError && (
+          <p
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+          >
+            {requestError}
+          </p>
+        )}
+
         <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-          {["All", "Announcements", "Advisories"].map((tab) => (
+          {["All", "Announcements", "Advisories", "Campaigns"].map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveFilter(tab)}
@@ -77,21 +159,29 @@ export default function Announcement() {
           ))}
         </div>
 
-        {/* News Feed Cards */}
         <div className="space-y-4">
           {filteredNews.map((item) => (
-            <div
+            <article
               key={item.id}
+              id={`announcement-${item.id}`}
               className="bg-white rounded-2xl overflow-hidden border border-slate-100 shadow-sm transition-all hover:shadow-md"
             >
-              <div className="h-40 w-full relative">
-                <img
-                  src={item.image}
-                  alt={item.title}
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
-              </div>
+              {item.imageUrl ? (
+                <div className="h-40 w-full relative">
+                  <img
+                    src={item.imageUrl}
+                    alt={item.title}
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
+                </div>
+              ) : (
+                <div className="h-40 w-full bg-gradient-to-br from-blue-100 to-slate-200 flex items-center justify-center">
+                  <span className="text-sm font-bold tracking-widest text-slate-500">
+                    CAMPUS360
+                  </span>
+                </div>
+              )}
               <div className="p-4 space-y-2">
                 <span className="text-[10px] font-bold tracking-wider text-blue-600 uppercase">
                   {item.category}
@@ -99,20 +189,54 @@ export default function Announcement() {
                 <h3 className="text-base font-bold text-slate-900 leading-snug">
                   {item.title}
                 </h3>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  {item.description}
+                <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-line">
+                  {item.description || "No message content."}
                 </p>
+                {item.eventAt && (
+                  <p className="flex items-center gap-1.5 pt-1 text-[11px] font-medium text-slate-500">
+                    <Clock className="h-3.5 w-3.5" />
+                    {formatEventDateTime(item.eventAt)}
+                  </p>
+                )}
                 <div className="pt-2 flex items-center justify-between border-t border-slate-100 mt-3">
-                  <button className="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center space-x-1 group">
+                  <span className="text-xs font-bold text-blue-600 flex items-center space-x-1">
                     <span>Read article</span>
-                    <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
-                  </button>
+                    <ChevronRight className="w-4 h-4" />
+                  </span>
                 </div>
               </div>
-            </div>
+            </article>
           ))}
 
-          {filteredNews.length === 0 && (
+          {isLoading && announcements.length === 0 && (
+            <div
+              className="space-y-4"
+              role="status"
+              aria-label="Loading campus news"
+            >
+              {Array.from({ length: 2 }, (_, index) => (
+                <article
+                  key={`loading-news-${index}`}
+                  aria-hidden="true"
+                  className="bg-white rounded-2xl overflow-hidden border border-slate-100 shadow-sm animate-pulse"
+                >
+                  <div className="h-40 w-full bg-slate-200" />
+                  <div className="p-4 space-y-3">
+                    <div className="h-3 w-2/3 rounded bg-slate-200" />
+                    <div className="h-5 w-4/5 rounded bg-slate-200" />
+                    <div className="space-y-2">
+                      <div className="h-3 w-full rounded bg-slate-100" />
+                      <div className="h-3 w-full rounded bg-slate-100" />
+                      <div className="h-3 w-3/4 rounded bg-slate-100" />
+                    </div>
+                    <div className="h-3 w-1/3 rounded bg-slate-100" />
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+
+          {!isLoading && filteredNews.length === 0 && !requestError && (
             <div className="text-center py-12 text-slate-400 text-xs">
               No news updates found in this category.
             </div>

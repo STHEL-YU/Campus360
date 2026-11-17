@@ -142,6 +142,46 @@ const buildMonthCells = (year, month) => {
   return cells;
 };
 
+async function requestDashboardData(signal) {
+  const headers = { "X-Campus360-Admin": "1" };
+  const [usersResponse, announcementsResponse] = await Promise.all([
+    fetch("/api/student/admin-students", {
+      credentials: "same-origin",
+      headers,
+      signal,
+    }),
+    fetch("/api/news/announcements", {
+      credentials: "same-origin",
+      headers,
+      signal,
+    }),
+  ]);
+  const [usersResult, announcementsResult] = await Promise.all([
+    usersResponse.json(),
+    announcementsResponse.json(),
+  ]);
+
+  if (!usersResponse.ok) {
+    throw new Error(usersResult.error || "Unable to load registered users.");
+  }
+  if (!announcementsResponse.ok) {
+    throw new Error(
+      announcementsResult.error || "Unable to load news and announcements.",
+    );
+  }
+  if (
+    !Array.isArray(usersResult.users) ||
+    !Array.isArray(announcementsResult.announcements)
+  ) {
+    throw new Error("The server returned invalid dashboard data.");
+  }
+
+  return {
+    users: usersResult.users,
+    announcements: announcementsResult.announcements,
+  };
+}
+
 
 const useNow = () => {
   const [now, setNow] = useState(() => new Date());
@@ -198,46 +238,15 @@ export default function Dashboard({ onNavigate }) {
       isNew: false,
     },
   ]);
-
-  const [announcements, setAnnouncements] = useState([
-    {
-      id: "a1",
-      title: "Campus Safety Week 2025",
-      audience: "University-wide",
-      time: "Oct 14",
-      isNew: false,
-    },
-    {
-      id: "a2",
-      title: "Evening escort service",
-      audience: "All users",
-      time: "Oct 12",
-      isNew: false,
-    },
-  ]);
-
-  const [accounts, setAccounts] = useState([
-    {
-      id: "u1",
-      name: "Bianca Dela Cruz",
-      type: "Student",
-      college: "College of Nursing",
-      time: "Nov 12",
-      isNew: false,
-    },
-    {
-      id: "u2",
-      name: "Prof. Ramon Lopez",
-      type: "Faculty",
-      college: "College of Engineering",
-      time: "Nov 13",
-      isNew: false,
-    },
-  ]);
+ 
+  const [announcements, setAnnouncements] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [isDashboardLoading, setIsDashboardLoading] = useState(true);
+  const [hasLoadedDashboardData, setHasLoadedDashboardData] = useState(false);
+  const [dashboardDataError, setDashboardDataError] = useState("");
 
   // Counters for the metric cards
   const [addedIncidents, setAddedIncidents] = useState(0);
-  const [addedAccounts, setAddedAccounts] = useState(0);
 
   // Toasts + sound
   const [toasts, setToasts] = useState([]);
@@ -245,6 +254,67 @@ export default function Dashboard({ onNavigate }) {
   const soundRef = useRef(false);
   const audioCtxRef = useRef(null);
   const seq = useRef({ incident: 84, announcement: 0, account: 0 });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let refreshInFlight = false;
+
+    async function loadDashboardData() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      try {
+        const result = await requestDashboardData(controller.signal);
+        setAccounts(
+          result.users.map((user) => ({
+            id: user.id,
+            name: user.name,
+            type: user.accountType,
+            college: user.college,
+            time: user.submitted,
+            status: user.status,
+            isNew: false,
+          })),
+        );
+        setAnnouncements(
+          result.announcements
+            .filter((announcement) => announcement.status === "Published")
+            .map((announcement) => ({
+              id: announcement.id,
+              title: announcement.title,
+              audience: announcement.audience,
+              time: announcement.published,
+              imageUrl: announcement.imageUrl,
+              isNew: false,
+            })),
+        );
+        setHasLoadedDashboardData(true);
+        setDashboardDataError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setDashboardDataError(
+            error.message || "Unable to load dashboard data.",
+          );
+        }
+      } finally {
+        refreshInFlight = false;
+        if (!controller.signal.aborted) setIsDashboardLoading(false);
+      }
+    }
+
+    loadDashboardData();
+    const refreshTimer = window.setInterval(loadDashboardData, 15000);
+    window.addEventListener("focus", loadDashboardData);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadDashboardData);
+      controller.abort();
+    };
+  }, []);
+
+  const pendingAccounts = accounts.filter(
+    (account) => account.status === "Pending",
+  );
 
   const collegeReports = [
     { name: "Engineering", count: 64, width: "90%" },
@@ -382,11 +452,11 @@ export default function Dashboard({ onNavigate }) {
       type: pick.type,
       college: pick.college,
       time: nowTime(),
+      status: "Pending",
       isNew: true,
     };
 
     setAccounts((prev) => [account, ...prev]);
-    setAddedAccounts((c) => c + 1);
     expireNew(setAccounts, account.id);
     pushToast(
       "account",
@@ -427,6 +497,20 @@ export default function Dashboard({ onNavigate }) {
     day: "numeric",
     year: "numeric",
   });
+  const registeredUserCount = isDashboardLoading ? (
+    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+  ) : hasLoadedDashboardData ? (
+    accounts.length.toLocaleString()
+  ) : (
+    "—"
+  );
+  const pendingApprovalCount = isDashboardLoading ? (
+    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+  ) : hasLoadedDashboardData ? (
+    pendingAccounts.length.toLocaleString()
+  ) : (
+    "—"
+  );
 
   return (
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none">
@@ -489,7 +573,7 @@ export default function Dashboard({ onNavigate }) {
                 Live campus status
               </span>
 
-              {DEMO_MODE && (
+              {/* {DEMO_MODE && (
                 <>
                   <button
                     onClick={() => addIncident()}
@@ -510,7 +594,7 @@ export default function Dashboard({ onNavigate }) {
                     Test account
                   </button>
                 </>
-              )}
+              )} */}
 
               <button
                 onClick={toggleSound}
@@ -531,6 +615,15 @@ export default function Dashboard({ onNavigate }) {
           </div>
         </div>
 
+        {dashboardDataError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-700"
+          >
+            {dashboardDataError}
+          </div>
+        )}
+
         <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
           {/*Main dashboard  */}
           <div className="flex flex-col gap-6 min-w-0">
@@ -547,9 +640,11 @@ export default function Dashboard({ onNavigate }) {
                   </div>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-slate-900">8,429</div>
-                  <div className="text-[11px] text-emerald-600 font-medium mt-1">
-                    +184 this month
+                  <div className="text-2xl font-bold text-slate-900">
+                    {registeredUserCount}
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-medium mt-1">
+                    Across your college
                   </div>
                 </div>
               </div>
@@ -566,7 +661,7 @@ export default function Dashboard({ onNavigate }) {
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {12 + addedAccounts}
+                    {pendingApprovalCount}
                   </div>
                   <div className="text-[11px] text-slate-400 font-medium mt-1">
                     Requires attention
@@ -789,34 +884,52 @@ export default function Dashboard({ onNavigate }) {
                       </p>
                     </div>
                   </div>
-                  {newCount(accounts) > 0 && (
+                  {pendingAccounts.length > 0 && (
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-                      {newCount(accounts)} new
+                      {pendingAccounts.length} pending
                     </span>
                   )}
                 </div>
 
                 <div className="flex flex-col gap-2.5">
-                  {accounts.slice(0, 3).map((account) => (
-                    <div
-                      key={account.id}
-                      className={`rounded-xl p-3 flex flex-col gap-1 border transition-colors ${
-                        account.isNew
-                          ? "bg-emerald-50/70 border-emerald-200"
-                          : "bg-slate-50 border-slate-100"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-slate-900">
-                          {account.name}
+                  {isDashboardLoading ? (
+                    Array.from({ length: 3 }, (_, index) => (
+                      <div
+                        key={`loading-account-${index}`}
+                        aria-hidden="true"
+                        className="h-[58px] animate-pulse rounded-xl bg-slate-100"
+                      />
+                    ))
+                  ) : !hasLoadedDashboardData ? (
+                    <p className="py-4 text-center text-xs text-slate-400">
+                      Unable to load accounts.
+                    </p>
+                  ) : pendingAccounts.length > 0 ? (
+                    pendingAccounts.slice(0, 3).map((account) => (
+                      <div
+                        key={account.id}
+                        className={`rounded-xl p-3 flex flex-col gap-1 border transition-colors ${
+                          account.isNew
+                            ? "bg-emerald-50/70 border-emerald-200"
+                            : "bg-slate-50 border-slate-100"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-900">
+                            {account.name}
+                          </span>
+                          {account.isNew && <NewPill />}
+                        </div>
+                        <span className="text-[11px] text-slate-500">
+                          {account.type} • {account.college} • {account.time}
                         </span>
-                        {account.isNew && <NewPill />}
                       </div>
-                      <span className="text-[11px] text-slate-500">
-                        {account.type} • {account.college} • {account.time}
-                      </span>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <p className="py-4 text-center text-xs text-slate-400">
+                      No accounts awaiting approval.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -871,47 +984,78 @@ export default function Dashboard({ onNavigate }) {
                     </p>
                   </div>
                 </div>
-                {newCount(announcements) > 0 && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {newCount(announcements)} new
+                {/* {hasLoadedDashboardData && announcements.length > 0 && (
+                  <span className="text-[10px] font-bold rounded-full bg-blue-100 text-blue-700">
+                    {announcements.length} published
                   </span>
-                )}
+                )} */}
               </div>
 
               {/* Shows one announcement at a time; scroll for the rest */}
               <div className="flex flex-col gap-4 max-h-[200px] overflow-y-auto snap-y snap-mandatory pr-1">
-                {announcements.map((item, idx) => (
+                {isDashboardLoading ? (
                   <div
-                    key={item.id}
-                    onClick={() => go(ROUTES.news)}
-                    className={`snap-start shrink-0 min-h-[180px] rounded-2xl p-5 flex flex-col justify-between text-white bg-gradient-to-br cursor-pointer hover:brightness-110 transition ${
-                      AD_STYLES[idx % AD_STYLES.length]
-                    } ${item.isNew ? "ring-2 ring-rose-400 ring-offset-2" : ""}`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
-                        <Megaphone className="w-4 h-4" />
-                      </div>
-                      {item.isNew ? (
-                        <NewPill />
-                      ) : (
-                        <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full">
-                          {item.time}
-                        </span>
+                    role="status"
+                    aria-label="Loading announcements"
+                    className="h-[180px] animate-pulse rounded-2xl bg-slate-200"
+                  />
+                ) : !hasLoadedDashboardData ? (
+                  <p className="py-8 text-center text-xs text-slate-400">
+                    Unable to load announcements.
+                  </p>
+                ) : announcements.length === 0 ? (
+                  <p className="py-8 text-center text-xs text-slate-400">
+                    No published announcements.
+                  </p>
+                ) : (
+                  announcements.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      onClick={() => go(ROUTES.news)}
+                      className={`relative overflow-hidden snap-start shrink-0 min-h-[180px] rounded-2xl p-5 flex flex-col justify-between text-white bg-gradient-to-br cursor-pointer hover:brightness-110 transition ${
+                        AD_STYLES[idx % AD_STYLES.length]
+                      } ${item.isNew ? "ring-2 ring-rose-400 ring-offset-2" : ""}`}
+                    >
+                      {item.imageUrl && (
+                        <>
+                          <img
+                            src={item.imageUrl}
+                            alt=""
+                            aria-hidden="true"
+                            loading="lazy"
+                            className="absolute inset-0 h-full w-full object-cover"
+                          />
+                          <div
+                            aria-hidden="true"
+                            className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/35 to-slate-900/20"
+                          />
+                        </>
                       )}
-                    </div>
+                      <div className="relative z-10 flex items-center justify-between">
+                        <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
+                          <Megaphone className="w-4 h-4" />
+                        </div>
+                        {item.isNew ? (
+                          <NewPill />
+                        ) : (
+                          <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full">
+                            {item.time}
+                          </span>
+                        )}
+                      </div>
 
-                    <div className="flex flex-col gap-1">
-                      <span className="text-base font-bold leading-snug">
-                        {item.title}
-                      </span>
-                      <span className="text-[11px] text-white/80 font-medium">
-                        {item.audience}
-                        {item.isNew ? ` • ${item.time}` : ""}
-                      </span>
+                      <div className="relative z-10 flex flex-col gap-1">
+                        <span className="text-base font-bold leading-snug">
+                          {item.title}
+                        </span>
+                        <span className="text-[11px] text-white/80 font-medium">
+                          {item.audience}
+                          {item.isNew ? ` • ${item.time}` : ""}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </aside>
 

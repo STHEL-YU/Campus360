@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -41,6 +41,68 @@ import { isAuthed, signIn, signOut } from "./auth";
 function StudentLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [notificationItems, setNotificationItems] = useState([]);
+  const [notificationError, setNotificationError] = useState("");
+
+  useEffect(() => {
+    if (!isAuthed("student")) return undefined;
+
+    const controller = new AbortController();
+    let requestInFlight = false;
+
+    async function loadNotifications() {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const response = await fetch("/api/news/feed", {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to load notifications.");
+        }
+        if (!Array.isArray(result.announcements)) {
+          throw new Error("The server returned an invalid news feed.");
+        }
+
+        const today = new Date().toISOString().slice(0, 10);
+        const newAnnouncements = result.announcements.filter(
+          (announcement) => announcement.publishedAt === today,
+        );
+        if (!controller.signal.aborted) {
+          setNotificationItems(
+            newAnnouncements.map((announcement) => ({
+              id: announcement.id,
+              title: announcement.title,
+              type: announcement.type,
+              published: announcement.published,
+              imageUrl: announcement.imageUrl,
+            })),
+          );
+          setNotificationError("");
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          console.error("Student notification count failed:", error);
+          setNotificationError(error.message || "Unable to load notifications.");
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    }
+
+    loadNotifications();
+    const refreshTimer = window.setInterval(loadNotifications, 15000);
+    window.addEventListener("focus", loadNotifications);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadNotifications);
+      controller.abort();
+    };
+  }, []);
 
   // Only check student authentication
   if (!isAuthed("student")) {
@@ -72,7 +134,13 @@ function StudentLayout() {
           title="Campus360"
           showBack={!isHome}
           onBack={() => navigate(-1)}
-          notificationCount={3}
+          notificationItems={notificationItems}
+          notificationError={notificationError}
+          onNotificationSelect={(announcement) =>
+            navigate("/student/news", {
+              state: { announcementId: announcement.id },
+            })
+          }
         />
 
         <div className="flex-1 overflow-y-auto pb-28">

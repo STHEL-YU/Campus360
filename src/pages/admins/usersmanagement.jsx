@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 
 async function requestStudents(method, body, signal) {
-  const response = await fetch("/api/admin/students", {
+  const response = await fetch("/api/student/admin-students", {
     method,
     credentials: "same-origin",
     headers: {
@@ -865,7 +865,7 @@ export default function UserManagement() {
                         ) : (
                           <img
                             key={pendingSelected.id}
-                            src={`/api/admin/student-image?studentId=${encodeURIComponent(pendingSelected.id)}`}
+                          src={`/api/student/admin-student-image?studentId=${encodeURIComponent(pendingSelected.id)}`}
                             alt={`${pendingSelected.name}'s school ID`}
                             loading="lazy"
                             onError={() => setFailedIdImage(pendingSelected.id)}

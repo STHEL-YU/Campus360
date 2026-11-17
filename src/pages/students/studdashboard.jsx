@@ -1,10 +1,64 @@
+import { useEffect, useState } from "react";
 import { getStudentProfile } from "../../auth";
-import { AlertTriangle, ChevronRight, CheckCircle2, Clock } from "lucide-react";
+import { Link } from "react-router-dom";
+import { AlertTriangle, ChevronRight, Clock } from "lucide-react";
 
 export default function Dashboard({ onReportClick }) {
   const profile = getStudentProfile() || {};
   const firstName = profile.fullName?.trim().split(/\s+/)[0] || "Student";
   const avatar = profile.profileImage || "/default-avatar.svg";
+  const [todayNews, setTodayNews] = useState([]);
+  const [isNewsLoading, setIsNewsLoading] = useState(true);
+  const [newsError, setNewsError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let requestInFlight = false;
+
+    async function loadTodayNews() {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const response = await fetch("/api/news/feed", {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to load campus news.");
+        }
+        if (!Array.isArray(result.announcements)) {
+          throw new Error("The server returned an invalid news feed.");
+        }
+
+        const today = new Date().toISOString().slice(0, 10);
+        setTodayNews(
+          result.announcements
+            .filter((announcement) => announcement.publishedAt === today)
+            .slice(0, 3),
+        );
+        setNewsError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setNewsError(error.message || "Unable to load campus news.");
+        }
+      } finally {
+        requestInFlight = false;
+        if (!controller.signal.aborted) setIsNewsLoading(false);
+      }
+    }
+
+    loadTodayNews();
+    const refreshTimer = window.setInterval(loadTodayNews, 15000);
+    window.addEventListener("focus", loadTodayNews);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadTodayNews);
+      controller.abort();
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-28">
@@ -117,50 +171,75 @@ export default function Dashboard({ onReportClick }) {
         <section className="space-y-3 pt-2">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-800">Campus updates</h3>
-            <button className="text-xs font-semibold text-blue-600 hover:underline">
+            <Link
+              to="/student/news"
+              className="text-xs font-semibold text-blue-600 hover:underline"
+            >
               View all
-            </button>
+            </Link>
           </div>
 
-          {/* News Card 1: Safety Reminder Image Card */}
-          <div className="bg-white rounded-2xl overflow-hidden border border-slate-100 shadow-sm">
-            <div className="h-36 w-full relative">
-              <img
-                src="https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=600&auto=format&fit=crop&q=80"
-                alt="Campus green"
-                className="w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
-            </div>
-            <div className="p-4 space-y-2">
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-100">
-                🛡️ Safety reminder
-              </span>
-              <h4 className="text-sm font-bold text-slate-900">
-                Know your nearest emergency assembly point
-              </h4>
-              <p className="text-xs text-slate-400">October 14 · 3 min read</p>
-            </div>
-          </div>
+          {newsError && (
+            <p
+              role="alert"
+              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+            >
+              {newsError}
+            </p>
+          )}
 
-          {/* News Card 2: Resolved Incident Ticket */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex items-center justify-between">
-            <div className="flex items-start space-x-3">
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-              <div>
-                <h4 className="text-xs font-bold text-slate-900">
-                  Incident #C360-241008 resolved
-                </h4>
-                <p className="text-[11px] text-slate-500 mt-0.5">
-                  Library Annex access has returned to normal.
-                </p>
-              </div>
-            </div>
-            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 ml-2">
-              <CheckCircle2 className="w-3 h-3 mr-1" />
-              Resolved
-            </span>
-          </div>
+          {isNewsLoading ? (
+            <div
+              className="h-56 animate-pulse rounded-2xl bg-slate-200"
+              role="status"
+              aria-label="Loading today's campus news"
+            />
+          ) : todayNews.length > 0 ? (
+            todayNews.map((item) => (
+              <article
+                key={item.id}
+                className="bg-white rounded-2xl overflow-hidden border border-slate-100 shadow-sm"
+              >
+                {item.imageUrl ? (
+                  <div className="h-36 w-full relative">
+                    <img
+                      src={item.imageUrl}
+                      alt={item.title}
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
+                  </div>
+                ) : (
+                  <div className="h-24 w-full bg-gradient-to-br from-blue-100 to-slate-200 flex items-center justify-center">
+                    <span className="text-sm font-bold tracking-widest text-slate-500">
+                      CAMPUS360
+                    </span>
+                  </div>
+                )}
+                <div className="p-4 space-y-2">
+                  <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-blue-700">
+                    New today · {item.type}
+                  </span>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {item.title}
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
+                    {item.content || "No message content."}
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {item.published}
+                  </p>
+                </div>
+              </article>
+            ))
+          ) : (
+            !newsError && (
+              <p className="rounded-2xl bg-white px-4 py-8 text-center text-xs text-slate-400 shadow-sm">
+                No new announcements today.
+              </p>
+            )
+          )}
         </section>
       </main>
     </div>

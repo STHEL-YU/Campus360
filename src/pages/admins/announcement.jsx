@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Plus,
   FileText,
@@ -14,14 +14,91 @@ import {
   Save,
   Search,
   RotateCcw,
+  Upload,
+  LoaderCircle,
 } from "lucide-react";
+
+const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
+
+async function requestAnnouncements(method, body, signal) {
+  const response = await fetch("/api/news/announcements", {
+    method,
+    credentials: "same-origin",
+    headers: {
+      "X-Campus360-Admin": "1",
+      ...(body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    signal,
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to manage announcements.");
+  }
+  return result;
+}
+
+async function uploadAnnouncementImage(file) {
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Unable to read the announcement image."));
+        return;
+      }
+      const separatorIndex = reader.result.indexOf(",");
+      if (separatorIndex < 0) {
+        reject(new Error("Unable to read the announcement image."));
+        return;
+      }
+      resolve(reader.result.slice(separatorIndex + 1));
+    };
+    reader.onerror = () =>
+      reject(reader.error || new Error("Unable to read the announcement image."));
+    reader.readAsDataURL(file);
+  });
+
+  const response = await fetch("/api/news/upload-image", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contentType: file.type, base64 }),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result.error || "Unable to upload the announcement image.");
+  }
+  return result;
+}
+
+function toLocalDateTimeValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
+}
+
+function formatEventDateTime(value) {
+  if (!value) return "Not set";
+  return new Date(value).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
 
 export default function NewsAnnouncements() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [type, setType] = useState("Announcement");
-  const [audience, setAudience] = useState("University-wide");
+  const [audience, setAudience] = useState("General announcement");
   const [content, setContent] = useState("");
+  const [eventAt, setEventAt] = useState("");
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState("");
   const [selectedId, setSelectedId] = useState(null);
 
   // Edit / delete 
@@ -37,30 +114,50 @@ export default function NewsAnnouncements() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const [publishedContent, setPublishedContent] = useState([
-    {
-      id: 1,
-      title: "Campus Safety Week 2025",
-      type: "Campaign",
-      published: "Oct 14, 2025",
-      publishedAt: "2025-10-14",
-      audience: "University-wide",
-      status: "Published",
-      content:
-        "Campus Safety Week runs all week with safety drills, workshops, and awareness booths across the university. Everyone is encouraged to take part.",
-    },
-    {
-      id: 2,
-      title: "Evening escort service",
-      type: "Announcement",
-      published: "Oct 12, 2025",
-      publishedAt: "2025-10-12",
-      audience: "All users",
-      status: "Published",
-      content:
-        "Campus security now offers an evening escort service. Request an escort through the app or at any security post, and an officer will walk with you to your destination on campus.",
-    },
-  ]);
+  const [publishedContent, setPublishedContent] = useState([]);
+  const [adminCollege, setAdminCollege] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [requestError, setRequestError] = useState("");
+  const isInitialLoading = isLoading && publishedContent.length === 0;
+
+  useEffect(() => {
+    if (imagePreview.startsWith("blob:")) {
+      return () => URL.revokeObjectURL(imagePreview);
+    }
+  }, [imagePreview]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadAnnouncements() {
+      try {
+        const result = await requestAnnouncements(
+          "GET",
+          undefined,
+          controller.signal,
+        );
+        if (
+          !Array.isArray(result.announcements) ||
+          typeof result.adminCollege !== "string"
+        ) {
+          throw new Error("The server returned an invalid announcement list.");
+        }
+        setPublishedContent(result.announcements);
+        setAdminCollege(result.adminCollege);
+        setRequestError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setRequestError(error.message || "Unable to load announcements.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+
+    loadAnnouncements();
+    return () => controller.abort();
+  }, []);
 
   const selectedItem =
     publishedContent.find((item) => item.id === selectedId) || null;
@@ -97,6 +194,7 @@ export default function NewsAnnouncements() {
         item.type,
         item.published,
         item.audience,
+        item.targetCollege,
         item.status,
         item.content,
       ].some((value) => (value || "").toLowerCase().includes(query));
@@ -120,8 +218,11 @@ export default function NewsAnnouncements() {
   const resetForm = () => {
     setTitle("");
     setType("Announcement");
-    setAudience("University-wide");
+    setAudience("General announcement");
     setContent("");
+    setEventAt("");
+    setImageFile(null);
+    setImagePreview("");
   };
 
   const closeModal = () => {
@@ -129,61 +230,116 @@ export default function NewsAnnouncements() {
     resetForm();
   };
 
-  const handlePublish = () => {
+  const handleImageChange = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    if (!IMAGE_TYPES.has(file.type)) {
+      setRequestError("Choose a JPG or PNG image.");
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE) {
+      setRequestError("Announcement images must be 3 MB or smaller.");
+      return;
+    }
+
+    setRequestError("");
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const removeImage = () => {
+    setImageFile(null);
+    setImagePreview("");
+    setEditForm((previous) =>
+      previous ? { ...previous, imagePath: null, imageUrl: null } : previous,
+    );
+  };
+
+  const handlePublish = async () => {
     if (!title.trim()) return;
 
-    const now = new Date();
-    const newItem = {
-      id: Date.now(),
-      title: title.trim(),
-      type,
-      audience,
-      content: content.trim(),
-      status: "Published",
-      published: now.toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      }),
-      publishedAt: now.toLocaleDateString("en-CA"), 
-    };
-
-    setPublishedContent([newItem, ...publishedContent]);
-    setSelectedId(newItem.id);
-    closeModal();
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      const uploadedImage = imageFile
+        ? await uploadAnnouncementImage(imageFile)
+        : null;
+      const { announcement } = await requestAnnouncements("POST", {
+        title: title.trim(),
+        type,
+        audience,
+        targetCollege:
+          audience === "Specific college" ? adminCollege : null,
+        content: content.trim(),
+        eventAt: eventAt ? new Date(eventAt).toISOString() : null,
+        imagePath: uploadedImage?.pathname || null,
+      });
+      setPublishedContent((previous) => [announcement, ...previous]);
+      setSelectedId(announcement.id);
+      closeModal();
+    } catch (error) {
+      setRequestError(error.message || "Unable to publish the announcement.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Update
   const openEdit = (item) => {
     setEditForm({ ...item });
+    setEventAt(toLocalDateTimeValue(item.eventAt));
+    setImageFile(null);
+    setImagePreview(item.imageUrl || "");
+    setRequestError("");
     setIsEditOpen(true);
   };
 
   const closeEdit = () => {
     setIsEditOpen(false);
     setEditForm(null);
+    setEventAt("");
+    setImageFile(null);
+    setImagePreview("");
   };
 
   const handleEditChange = (field, value) => {
     setEditForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleUpdate = () => {
-    if (!editForm.title.trim()) return;
+  const handleUpdate = async () => {
+    if (!editForm?.title.trim()) return;
 
-    setPublishedContent((prev) =>
-      prev.map((item) =>
-        item.id === editForm.id
-          ? {
-              ...editForm,
-              title: editForm.title.trim(),
-              content: editForm.content.trim(),
-            }
-          : item,
-      ),
-    );
-    setSelectedId(editForm.id);
-    closeEdit();
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      const uploadedImage = imageFile
+        ? await uploadAnnouncementImage(imageFile)
+        : null;
+      const { announcement } = await requestAnnouncements("PATCH", {
+        id: editForm.id,
+        title: editForm.title.trim(),
+        type: editForm.type,
+        audience: editForm.audience,
+        targetCollege:
+          editForm.audience === "Specific college" ? adminCollege : null,
+        content: editForm.content.trim(),
+        eventAt: eventAt ? new Date(eventAt).toISOString() : null,
+        imagePath: uploadedImage?.pathname || editForm.imagePath || null,
+      });
+      setPublishedContent((previous) =>
+        previous.map((item) =>
+          item.id === announcement.id ? announcement : item,
+        ),
+      );
+      setSelectedId(announcement.id);
+      closeEdit();
+    } catch (error) {
+      setRequestError(error.message || "Unable to update the announcement.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Delete 
@@ -197,12 +353,25 @@ export default function NewsAnnouncements() {
     setDeleteTargetId(null);
   };
 
-  const handleDelete = () => {
-    setPublishedContent((prev) =>
-      prev.filter((item) => item.id !== deleteTargetId),
-    );
-    if (selectedId === deleteTargetId) setSelectedId(null);
-    closeDelete();
+  const handleDelete = async () => {
+    if (!deleteTargetId) return;
+
+    setRequestError("");
+    setIsSaving(true);
+    try {
+      const { deletedId } = await requestAnnouncements("DELETE", {
+        id: deleteTargetId,
+      });
+      setPublishedContent((previous) =>
+        previous.filter((item) => item.id !== deletedId),
+      );
+      if (selectedId === deletedId) setSelectedId(null);
+      closeDelete();
+    } catch (error) {
+      setRequestError(error.message || "Unable to delete the announcement.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -246,7 +415,7 @@ export default function NewsAnnouncements() {
                 Reset
               </button>
             )}
-s
+
             <button
               onClick={() => setIsModalOpen(true)}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-md shadow-blue-600/20 transition-all"
@@ -256,6 +425,15 @@ s
             </button>
           </div>
         </div>
+
+        {requestError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-700"
+          >
+            {requestError}
+          </div>
+        )}
 
         {/*  List (left) | Details (right) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -267,8 +445,14 @@ s
                   Published content
                 </h2>
                 <p className="text-[11px] text-slate-400 font-medium">
-                  {filteredContent.length} of {publishedContent.length}{" "}
-                  announcements
+                  {isInitialLoading ? (
+                    <span className="block h-3 w-24 animate-pulse rounded bg-slate-200" />
+                  ) : (
+                    <>
+                      {filteredContent.length} of {publishedContent.length}{" "}
+                      announcements
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -295,44 +479,68 @@ s
                     <th className="py-3 px-4 text-right"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredContent.map((item) => {
-                    const isSelected = item.id === selectedId;
-
-                    return (
-                      <tr
-                        key={item.id}
-                        onClick={() => setSelectedId(item.id)}
-                        className={`cursor-pointer transition-colors ${
-                          isSelected ? "bg-blue-50/70" : "hover:bg-slate-50/60"
-                        }`}
-                      >
-                        <td
-                          className={`py-4 px-4 font-semibold ${isSelected ? "text-blue-700" : "text-slate-900"}`}
+                <tbody
+                  className="divide-y divide-slate-100"
+                  aria-busy={isInitialLoading}
+                >
+                  {isInitialLoading
+                    ? Array.from({ length: 5 }, (_, index) => (
+                        <tr
+                          key={`loading-announcement-${index}`}
+                          aria-hidden="true"
                         >
-                          {item.title}
-                        </td>
-                        <td className="py-4 px-4 text-slate-600">
-                          {item.type}
-                        </td>
-                        <td className="py-4 px-4 text-slate-500">
-                          {item.published}
-                        </td>
-                        <td className="py-4 px-4 text-slate-600">
-                          {item.audience}
-                        </td>
-                        <td className="py-4 px-4">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200/60">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            {item.status}
-                          </span>
-                        </td>
-                        <td className="py-4 px-4 text-right"></td>
-                      </tr>
-                    );
-                  })}
+                          {Array.from({ length: 6 }, (_, cellIndex) => (
+                            <td key={cellIndex} className="py-4 px-4">
+                              <span
+                                className={`block h-3 animate-pulse rounded bg-slate-200 ${
+                                  cellIndex === 0 ? "w-3/4" : "w-2/3"
+                                }`}
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))
+                    : filteredContent.map((item) => {
+                        const isSelected = item.id === selectedId;
 
-                  {filteredContent.length === 0 && (
+                        return (
+                          <tr
+                            key={item.id}
+                            onClick={() => setSelectedId(item.id)}
+                            className={`cursor-pointer transition-colors ${
+                              isSelected
+                                ? "bg-blue-50/70"
+                                : "hover:bg-slate-50/60"
+                            }`}
+                          >
+                            <td
+                              className={`py-4 px-4 font-semibold ${isSelected ? "text-blue-700" : "text-slate-900"}`}
+                            >
+                              {item.title}
+                            </td>
+                            <td className="py-4 px-4 text-slate-600">
+                              {item.type}
+                            </td>
+                            <td className="py-4 px-4 text-slate-500">
+                              {item.published}
+                            </td>
+                            <td className="py-4 px-4 text-slate-600">
+                              {item.audience === "Specific college"
+                                ? `${item.audience}: ${item.targetCollege}`
+                                : item.audience}
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200/60">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                {item.status}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4 text-right"></td>
+                          </tr>
+                        );
+                      })}
+
+                  {!isInitialLoading && filteredContent.length === 0 && (
                     <tr>
                       <td
                         colSpan={6}
@@ -351,7 +559,38 @@ s
 
           {/* Announcement Details */}
           <div className="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col shadow-2xs min-h-[320px]">
-            {selectedItem ? (
+            {isInitialLoading ? (
+              <div
+                className="flex flex-col gap-5 animate-pulse"
+                role="status"
+                aria-label="Loading announcement details"
+              >
+                <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div className="flex flex-col gap-3 w-full">
+                    <span className="h-5 w-24 rounded-full bg-slate-200" />
+                    <span className="h-5 w-3/4 rounded bg-slate-200" />
+                  </div>
+                  <span className="h-7 w-7 rounded-lg bg-slate-100" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {Array.from({ length: 4 }, (_, index) => (
+                    <div
+                      key={`loading-detail-meta-${index}`}
+                      className="flex flex-col gap-2"
+                    >
+                      <span className="h-3 w-16 rounded bg-slate-200" />
+                      <span className="h-3 w-24 rounded bg-slate-100" />
+                    </div>
+                  ))}
+                </div>
+                <span className="h-24 rounded-xl bg-slate-100" />
+                <div className="flex flex-col gap-2">
+                  <span className="h-3 w-16 rounded bg-slate-200" />
+                  <span className="h-3 w-full rounded bg-slate-100" />
+                  <span className="h-3 w-5/6 rounded bg-slate-100" />
+                </div>
+              </div>
+            ) : selectedItem ? (
               <div className="flex flex-col gap-5">
                 <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                   <div className="flex flex-col gap-2">
@@ -371,7 +610,7 @@ s
                   </button>
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="flex flex-col gap-1">
                     <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
                       <Tag className="w-3 h-3" /> Type
@@ -393,10 +632,28 @@ s
                       <Users className="w-3 h-3" /> Audience
                     </span>
                     <span className="text-xs font-semibold text-slate-800">
-                      {selectedItem.audience}
+                      {selectedItem.audience === "Specific college"
+                        ? `${selectedItem.audience}: ${selectedItem.targetCollege}`
+                        : selectedItem.audience}
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      <Calendar className="w-3 h-3" /> Event date & time
+                    </span>
+                    <span className="text-xs font-semibold text-slate-800">
+                      {formatEventDateTime(selectedItem.eventAt)}
                     </span>
                   </div>
                 </div>
+
+                {selectedItem.imageUrl && (
+                  <img
+                    src={selectedItem.imageUrl}
+                    alt={selectedItem.title}
+                    className="w-full max-h-56 rounded-xl object-cover"
+                  />
+                )}
 
                 <div className="flex flex-col gap-1.5">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
@@ -465,6 +722,12 @@ s
               </button>
             </div>
 
+            {requestError && (
+              <p role="alert" className="text-xs text-rose-700">
+                {requestError}
+              </p>
+            )}
+
             <div className="flex flex-col gap-1.5">
               <label className={labelClass}>Title</label>
               <input
@@ -497,12 +760,70 @@ s
                   onChange={(e) => setAudience(e.target.value)}
                   className={inputClass}
                 >
+                  <option value="General announcement">
+                    General announcement
+                  </option>
+                  <option value="Specific college">Specific college</option>
                   <option value="University-wide">University-wide</option>
                   <option value="All users">All users</option>
                   <option value="Students Only">Students Only</option>
                   <option value="Faculty Only">Faculty Only</option>
                 </select>
               </div>
+            </div>
+
+            {audience === "Specific college" && (
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClass}>Assigned college</label>
+                <input
+                  type="text"
+                  value={adminCollege}
+                  readOnly
+                  className={inputClass}
+                />
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <label className={labelClass}>Event date & time (optional)</label>
+              <input
+                type="datetime-local"
+                value={eventAt}
+                onChange={(e) => setEventAt(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className={`${labelClass} flex items-center gap-1`}>
+                <Upload className="h-3 w-3" />
+                Image (JPG or PNG, up to 3 MB)
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png"
+                onChange={handleImageChange}
+                disabled={isSaving}
+                className={inputClass}
+              />
+              {imagePreview && (
+                <div className="relative w-fit">
+                  <img
+                    src={imagePreview}
+                    alt="Announcement preview"
+                    className="mt-2 max-h-36 rounded-xl object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={removeImage}
+                    disabled={isSaving}
+                    aria-label="Remove announcement image"
+                    className="absolute right-2 top-4 rounded-full bg-slate-900/70 p-1 text-white"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -525,11 +846,19 @@ s
               </button>
               <button
                 onClick={handlePublish}
-                disabled={!title.trim()}
+                disabled={!title.trim() || isSaving}
+                aria-busy={isSaving}
                 className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-600/20 transition-all"
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>Publish Now</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Publishing..." : "Publish Now"}</span>
               </button>
             </div>
           </div>
@@ -558,6 +887,12 @@ s
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {requestError && (
+              <p role="alert" className="text-xs text-rose-700">
+                {requestError}
+              </p>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <label className={labelClass}>Title</label>
@@ -590,12 +925,70 @@ s
                   onChange={(e) => handleEditChange("audience", e.target.value)}
                   className={inputClass}
                 >
+                  <option value="General announcement">
+                    General announcement
+                  </option>
+                  <option value="Specific college">Specific college</option>
                   <option value="University-wide">University-wide</option>
                   <option value="All users">All users</option>
                   <option value="Students Only">Students Only</option>
                   <option value="Faculty Only">Faculty Only</option>
                 </select>
               </div>
+            </div>
+
+            {editForm.audience === "Specific college" && (
+              <div className="flex flex-col gap-1.5">
+                <label className={labelClass}>Assigned college</label>
+                <input
+                  type="text"
+                  value={adminCollege}
+                  readOnly
+                  className={inputClass}
+                />
+              </div>
+            )}
+
+            <div className="flex flex-col gap-1.5">
+              <label className={labelClass}>Event date & time (optional)</label>
+              <input
+                type="datetime-local"
+                value={eventAt}
+                onChange={(e) => setEventAt(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className={`${labelClass} flex items-center gap-1`}>
+                <Upload className="h-3 w-3" />
+                Image (JPG or PNG, up to 3 MB)
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png"
+                onChange={handleImageChange}
+                disabled={isSaving}
+                className={inputClass}
+              />
+              {imagePreview && (
+                <div className="relative w-fit">
+                  <img
+                    src={imagePreview}
+                    alt="Announcement preview"
+                    className="mt-2 max-h-36 rounded-xl object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={removeImage}
+                    disabled={isSaving}
+                    aria-label="Remove announcement image"
+                    className="absolute right-2 top-4 rounded-full bg-slate-900/70 p-1 text-white"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -617,11 +1010,19 @@ s
               </button>
               <button
                 onClick={handleUpdate}
-                disabled={!editForm.title.trim()}
+                disabled={!editForm.title.trim() || isSaving}
+                aria-busy={isSaving}
                 className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold shadow-md shadow-blue-600/20 transition-all"
               >
-                <Save className="w-3.5 h-3.5" />
-                <span>Save Changes</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Save className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Saving..." : "Save Changes"}</span>
               </button>
             </div>
           </div>
@@ -659,16 +1060,26 @@ s
             <div className="flex items-center gap-2 pt-2">
               <button
                 onClick={closeDelete}
+                disabled={isSaving}
                 className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDelete}
+                disabled={isSaving}
+                aria-busy={isSaving}
                 className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-rose-600/20 transition-all"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Yes, delete</span>
+                {isSaving ? (
+                  <LoaderCircle
+                    className="w-3.5 h-3.5 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Trash2 className="w-3.5 h-3.5" />
+                )}
+                <span>{isSaving ? "Deleting..." : "Yes, delete"}</span>
               </button>
             </div>
           </div>

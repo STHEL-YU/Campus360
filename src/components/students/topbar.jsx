@@ -1,11 +1,14 @@
-import React from "react";
-import { Bell, ChevronLeft, Shield } from "lucide-react";
+import { useState } from "react";
+import { Bell, Megaphone, Shield } from "lucide-react";
 
 export default function TopBar({
   title,
-  notificationCount = 3,
-  onNotificationClick,
+  notificationItems = [],
+  notificationError = "",
+  onNotificationSelect,
 }) {
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
   return (
     <header className="flex items-center justify-between px-6 pt-6 pb-4 bg-white border-b border-slate-100 shadow-sm sticky top-0 z-30">
       {/* Left: Optional Back Button + Icon + Title */}
@@ -21,18 +24,88 @@ export default function TopBar({
       </div>
 
       {/* Right Notifications Button */}
-      <button
-        onClick={onNotificationClick}
-        aria-label="Notifications"
-        className="relative w-10 h-10 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-colors shrink-0 ml-3"
-      >
-        <Bell className="w-5 h-5 text-slate-600" />
-        {notificationCount > 0 && (
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm animate-pulse">
-            {notificationCount}
-          </span>
+      <div className="relative ml-3 shrink-0">
+        <button
+          onClick={() => setIsNotificationsOpen((open) => !open)}
+          aria-label={
+            notificationItems.length > 0
+              ? `${notificationItems.length} new announcements`
+              : "Notifications"
+          }
+          aria-expanded={isNotificationsOpen}
+          aria-controls="student-notifications-panel"
+          className="relative w-10 h-10 bg-slate-100 hover:bg-slate-200 rounded-xl flex items-center justify-center transition-colors"
+        >
+          <Bell className="w-5 h-5 text-slate-600" />
+          {notificationItems.length > 0 && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm animate-pulse">
+              {notificationItems.length}
+            </span>
+          )}
+        </button>
+
+        {isNotificationsOpen && (
+          <div
+            id="student-notifications-panel"
+            role="region"
+            aria-label="Notifications"
+            className="absolute right-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+          >
+            <div className="border-b border-slate-100 px-4 py-3">
+              <h2 className="text-sm font-bold text-slate-900">
+                Notifications
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Announcements published today
+              </p>
+            </div>
+
+            {notificationError ? (
+              <p role="alert" className="px-4 py-6 text-center text-xs text-rose-600">
+                {notificationError}
+              </p>
+            ) : notificationItems.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-slate-400">
+                No new announcements today.
+              </p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto">
+                {notificationItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setIsNotificationsOpen(false);
+                      onNotificationSelect?.(item);
+                    }}
+                    className="flex w-full items-start gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-slate-50"
+                  >
+                    {item.imageUrl ? (
+                      <img
+                        src={item.imageUrl}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-10 w-10 shrink-0 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                        <Megaphone className="h-4 w-4" />
+                      </span>
+                    )}
+                    <span className="flex min-w-0 flex-col gap-1">
+                      <span className="text-xs font-semibold text-slate-900">
+                        {item.title}
+                      </span>
+                      <span className="text-[10px] text-slate-500">
+                        {item.type} · {item.published}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
-      </button>
+      </div>
     </header>
   );
 }

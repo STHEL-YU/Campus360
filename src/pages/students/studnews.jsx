@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clock, ChevronRight } from "lucide-react";
+import { Clock, ChevronRight, X } from "lucide-react";
 import { useLocation } from "react-router-dom";
 
 const NEWS_RECENCY_DAYS = 7;
@@ -39,6 +39,7 @@ export default function Announcement() {
   const [announcements, setAnnouncements] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [requestError, setRequestError] = useState("");
+  const [selectedItem, setSelectedItem] = useState(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,6 +73,23 @@ export default function Announcement() {
     };
   }, []);
 
+  // Close the modal with Escape and lock page scroll while it is open
+  useEffect(() => {
+    if (!selectedItem) return;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setSelectedItem(null);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedItem]);
+
   const newsData = announcements.map((item) => {
     const publishedDate = item.published || "";
     const categoryDate = item.eventAt
@@ -83,7 +101,8 @@ export default function Announcement() {
 
     return {
       ...item,
-      category: `${getCategoryLabel(item.type)} · ${categoryDate}`.toUpperCase(),
+      category:
+        `${getCategoryLabel(item.type)} · ${categoryDate}`.toUpperCase(),
       description: item.content,
       type:
         item.type === "Safety Advisory"
@@ -96,9 +115,7 @@ export default function Announcement() {
 
   const recentCutoff = new Date();
   recentCutoff.setUTCHours(0, 0, 0, 0);
-  recentCutoff.setUTCDate(
-    recentCutoff.getUTCDate() - (NEWS_RECENCY_DAYS - 1),
-  );
+  recentCutoff.setUTCDate(recentCutoff.getUTCDate() - (NEWS_RECENCY_DAYS - 1));
   const cutoffDate = recentCutoff.toISOString().slice(0, 10);
   const todayDate = new Date().toISOString().slice(0, 10);
   const recentNews = newsData.filter(
@@ -189,9 +206,6 @@ export default function Announcement() {
                 <h3 className="text-base font-bold text-slate-900 leading-snug">
                   {item.title}
                 </h3>
-                <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-line">
-                  {item.description || "No message content."}
-                </p>
                 {item.eventAt && (
                   <p className="flex items-center gap-1.5 pt-1 text-[11px] font-medium text-slate-500">
                     <Clock className="h-3.5 w-3.5" />
@@ -199,10 +213,15 @@ export default function Announcement() {
                   </p>
                 )}
                 <div className="pt-2 flex items-center justify-between border-t border-slate-100 mt-3">
-                  <span className="text-xs font-bold text-blue-600 flex items-center space-x-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedItem(item)}
+                    aria-haspopup="dialog"
+                    className="text-xs font-bold text-blue-600 flex items-center space-x-1 hover:underline"
+                  >
                     <span>Read article</span>
                     <ChevronRight className="w-4 h-4" />
-                  </span>
+                  </button>
                 </div>
               </div>
             </article>
@@ -243,6 +262,76 @@ export default function Announcement() {
           )}
         </div>
       </main>
+
+      {/* Article details modal */}
+      {selectedItem && (
+        <div
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/60 p-0 sm:items-center sm:p-5"
+          onClick={() => setSelectedItem(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="announcement-modal-title"
+            onClick={(event) => event.stopPropagation()}
+            className="relative flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl"
+          >
+            <button
+              type="button"
+              onClick={() => setSelectedItem(null)}
+              aria-label="Close article"
+              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-slate-900/60 text-white transition-colors hover:bg-slate-900/80"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="overflow-y-auto">
+              {selectedItem.imageUrl ? (
+                <div className="relative h-48 w-full">
+                  <img
+                    src={selectedItem.imageUrl}
+                    alt={selectedItem.title}
+                    className="h-full w-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
+                </div>
+              ) : (
+                <div className="flex h-32 w-full items-center justify-center bg-gradient-to-br from-blue-100 to-slate-200">
+                  <span className="text-sm font-bold tracking-widest text-slate-500">
+                    CAMPUS360
+                  </span>
+                </div>
+              )}
+
+              <div className="space-y-3 p-5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                  {selectedItem.category}
+                </span>
+                <h2
+                  id="announcement-modal-title"
+                  className="text-lg font-bold leading-snug text-slate-900"
+                >
+                  {selectedItem.title}
+                </h2>
+                {selectedItem.eventAt && (
+                  <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    <Clock className="h-3.5 w-3.5" />
+                    {formatEventDateTime(selectedItem.eventAt)}
+                  </p>
+                )}
+                <p className="whitespace-pre-line text-sm leading-relaxed text-slate-600">
+                  {selectedItem.description || "No message content."}
+                </p>
+                {selectedItem.published && (
+                  <p className="border-t border-slate-100 pt-3 text-[11px] text-slate-400">
+                    Published {selectedItem.published}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

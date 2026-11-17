@@ -6,6 +6,7 @@ import {
   Clock,
   CheckCircle2,
   Check,
+  LoaderCircle,
   X,
   XCircle,
   Search,
@@ -60,13 +61,22 @@ const timeAgo = (ms) => {
 const STATUS_ORDER = { New: 0, Pending: 1, Resolved: 2, Declined: 3 };
 
 function normalizeReportStatus(status) {
-  const normalized = String(status || "").trim().toLowerCase();
+  const normalized = String(status || "")
+    .trim()
+    .toLowerCase();
   if (normalized === "resolved") return "Resolved";
   if (["pending", "active", "in review"].includes(normalized)) {
     return "Pending";
   }
   if (["declined", "rejected"].includes(normalized)) return "Declined";
   return "New";
+}
+
+// Small spinner used inside buttons while a request is running
+function Spinner({ className = "w-3 h-3" }) {
+  return (
+    <LoaderCircle className={`${className} animate-spin`} aria-hidden="true" />
+  );
 }
 
 export default function CampusMonitoring() {
@@ -83,6 +93,13 @@ export default function CampusMonitoring() {
   const [imageLoadFailed, setImageLoadFailed] = useState({});
   const [confirm, setConfirm] = useState(null);
   const [mapError, setMapError] = useState(false);
+
+  // Request in progress: { id, action } where action is
+  // "accept" | "resolve" | "decline" | "delete"
+  const [busy, setBusy] = useState(null);
+  const isBusyFor = (id) => busy?.id === id;
+  const isBusyAction = (id, action) =>
+    busy?.id === id && busy.action === action;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -166,8 +183,9 @@ export default function CampusMonitoring() {
   const confirmReport = reports.find((r) => r.id === confirm?.id) || null;
 
   // Actions
-  const setStatus = async (id, status) => {
+  const setStatus = async (id, status, action) => {
     setActionError("");
+    setBusy({ id, action });
     try {
       const response = await fetch("/api/student/admin-report-status", {
         method: "PATCH",
@@ -185,27 +203,63 @@ export default function CampusMonitoring() {
 
       setReports((previous) =>
         previous.map((report) =>
-          report.id === id ? { ...report, status: result.report.status } : report,
+          report.id === id
+            ? { ...report, status: result.report.status }
+            : report,
         ),
       );
       return true;
     } catch (error) {
       setActionError(error.message || "Unable to update report status.");
       return false;
+    } finally {
+      setBusy(null);
     }
   };
 
-  const handleAccept = (id) => void setStatus(id, "Pending");
-  const handleResolve = (id) => void setStatus(id, "Resolved");
+  // Permanently deletes the report (and its files) in the database
+  const deleteReport = async (id) => {
+    setActionError("");
+    setBusy({ id, action: "delete" });
+    try {
+      const response = await fetch("/api/student/admin-report-delete", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Campus360-Admin": "1",
+        },
+        body: JSON.stringify({ id }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to delete the report.");
+      }
+
+      setReports((previous) =>
+        previous.filter((report) => report.id !== result.deletedId),
+      );
+      return true;
+    } catch (error) {
+      setActionError(error.message || "Unable to delete the report.");
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleAccept = (id) => void setStatus(id, "Pending", "accept");
+  const handleResolve = (id) => void setStatus(id, "Resolved", "resolve");
 
   const handleConfirm = async () => {
-    if (!confirm) return;
+    if (!confirm || busy) return;
 
     if (confirm.type === "decline") {
-      const updated = await setStatus(confirm.id, "Declined");
+      const updated = await setStatus(confirm.id, "Declined", "decline");
       if (!updated) return;
     } else if (confirm.type === "delete") {
-      setReports((prev) => prev.filter((r) => r.id !== confirm.id));
+      const deleted = await deleteReport(confirm.id);
+      if (!deleted) return;
       if (selectedId === confirm.id) setSelectedId(null);
     }
     setConfirm(null);
@@ -523,98 +577,121 @@ export default function CampusMonitoring() {
                       Try again
                     </button>
                   </div>
-                ) : visibleReports.map((report) => {
-                  const s = statusStyles[report.status];
+                ) : (
+                  visibleReports.map((report) => {
+                    const s = statusStyles[report.status];
+                    const rowBusy = isBusyFor(report.id);
 
-                  return (
-                    <div
-                      key={report.id}
-                      onClick={() => setSelectedId(report.id)}
-                      className={`border rounded-xl p-3.5 flex flex-col gap-1.5 cursor-pointer transition-colors ${
-                        selectedId === report.id
-                          ? "bg-blue-50/60 border-blue-200"
-                          : "bg-slate-50 border-slate-100 hover:bg-slate-100/70"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-semibold text-[10px] border ${s.badge}`}
-                        >
+                    return (
+                      <div
+                        key={report.id}
+                        onClick={() => setSelectedId(report.id)}
+                        className={`border rounded-xl p-3.5 flex flex-col gap-1.5 cursor-pointer transition-colors ${
+                          selectedId === report.id
+                            ? "bg-blue-50/60 border-blue-200"
+                            : "bg-slate-50 border-slate-100 hover:bg-slate-100/70"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${s.dot}`}
-                          ></span>
-                          {report.status}
-                        </span>
-                      </div>
-                      <div className="text-xs font-bold text-slate-900">
-                        {report.title}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {report.subtitle}
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
-                        <MapPin className="h-3 w-3" />
-                        {report.pin
-                          ? `Map pin: ${report.pin.x}%, ${report.pin.y}%`
-                          : "No map pin saved"}
-                      </div>
-                      {report.location && (
+                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full font-semibold text-[10px] border ${s.badge}`}
+                          >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full ${s.dot}`}
+                            ></span>
+                            {report.status}
+                          </span>
+                        </div>
+                        <div className="text-xs font-bold text-slate-900">
+                          {report.title}
+                        </div>
                         <div className="text-[11px] text-slate-500">
-                          {report.location}
+                          {report.subtitle}
                         </div>
-                      )}
-                      {report.desc && (
-                        <div className="text-[11px] text-slate-400 font-medium">
-                          {report.desc}
+                        <div className="flex items-center gap-1 text-[10px] font-medium text-slate-500">
+                          <MapPin className="h-3 w-3" />
+                          {report.pin
+                            ? `Map pin: ${report.pin.x}%, ${report.pin.y}%`
+                            : "No map pin saved"}
                         </div>
-                      )}
-
-                      <div className="flex items-center justify-between pt-1.5">
-                        <span className="text-[10px] text-slate-400 font-medium">
-                          {timeAgo(report.reportedAt)}
-                        </span>
-
-                        {report.status === "New" && (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setConfirm({ type: "decline", id: report.id });
-                              }}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg text-[11px] font-semibold transition-colors"
-                            >
-                              <XCircle className="w-3 h-3" />
-                              Decline
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleAccept(report.id);
-                              }}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold shadow-sm shadow-emerald-600/20 transition-all"
-                            >
-                              <Check className="w-3 h-3" />
-                              Accept
-                            </button>
+                        {report.location && (
+                          <div className="text-[11px] text-slate-500">
+                            {report.location}
+                          </div>
+                        )}
+                        {report.desc && (
+                          <div className="text-[11px] text-slate-400 font-medium">
+                            {report.desc}
                           </div>
                         )}
 
-                        {report.status === "Pending" && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleResolve(report.id);
-                            }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 rounded-lg text-[11px] font-semibold transition-colors"
-                          >
-                            <CheckCircle2 className="w-3 h-3" />
-                            Mark resolved
-                          </button>
-                        )}
+                        <div className="flex items-center justify-between pt-1.5">
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            {timeAgo(report.reportedAt)}
+                          </span>
+
+                          {report.status === "New" && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setConfirm({
+                                    type: "decline",
+                                    id: report.id,
+                                  });
+                                }}
+                                disabled={rowBusy}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <XCircle className="w-3 h-3" />
+                                Decline
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleAccept(report.id);
+                                }}
+                                disabled={rowBusy}
+                                aria-busy={isBusyAction(report.id, "accept")}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-semibold shadow-sm shadow-emerald-600/20 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isBusyAction(report.id, "accept") ? (
+                                  <Spinner />
+                                ) : (
+                                  <Check className="w-3 h-3" />
+                                )}
+                                {isBusyAction(report.id, "accept")
+                                  ? "Accepting..."
+                                  : "Accept"}
+                              </button>
+                            </div>
+                          )}
+
+                          {report.status === "Pending" && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleResolve(report.id);
+                              }}
+                              disabled={rowBusy}
+                              aria-busy={isBusyAction(report.id, "resolve")}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50 rounded-lg text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {isBusyAction(report.id, "resolve") ? (
+                                <Spinner />
+                              ) : (
+                                <CheckCircle2 className="w-3 h-3" />
+                              )}
+                              {isBusyAction(report.id, "resolve")
+                                ? "Resolving..."
+                                : "Mark resolved"}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
 
                 {!isLoading && !loadError && visibleReports.length === 0 && (
                   <div className="py-10 text-center text-xs text-slate-400 font-medium">
@@ -787,20 +864,40 @@ export default function CampusMonitoring() {
               {selectedReport.status === "New" && (
                 <button
                   onClick={() => handleAccept(selectedReport.id)}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all"
+                  disabled={isBusyFor(selectedReport.id)}
+                  aria-busy={isBusyAction(selectedReport.id, "accept")}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Accept report</span>
+                  {isBusyAction(selectedReport.id, "accept") ? (
+                    <Spinner className="w-3.5 h-3.5" />
+                  ) : (
+                    <Check className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {isBusyAction(selectedReport.id, "accept")
+                      ? "Accepting..."
+                      : "Accept report"}
+                  </span>
                 </button>
               )}
 
               {selectedReport.status === "Pending" && (
                 <button
                   onClick={() => handleResolve(selectedReport.id)}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all"
+                  disabled={isBusyFor(selectedReport.id)}
+                  aria-busy={isBusyAction(selectedReport.id, "resolve")}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-emerald-600/20 transition-all disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Mark as resolved</span>
+                  {isBusyAction(selectedReport.id, "resolve") ? (
+                    <Spinner className="w-3.5 h-3.5" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {isBusyAction(selectedReport.id, "resolve")
+                      ? "Resolving..."
+                      : "Mark as resolved"}
+                  </span>
                 </button>
               )}
 
@@ -810,7 +907,8 @@ export default function CampusMonitoring() {
                   onClick={() =>
                     setConfirm({ type: "decline", id: selectedReport.id })
                   }
-                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-semibold transition-colors"
+                  disabled={isBusyFor(selectedReport.id)}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <XCircle className="w-3.5 h-3.5" />
                   <span>Decline</span>
@@ -821,7 +919,8 @@ export default function CampusMonitoring() {
                 onClick={() =>
                   setConfirm({ type: "delete", id: selectedReport.id })
                 }
-                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors"
+                disabled={isBusyFor(selectedReport.id)}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Delete</span>
@@ -835,7 +934,7 @@ export default function CampusMonitoring() {
       {confirm && confirmReport && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
-          onClick={() => setConfirm(null)}
+          onClick={() => !busy && setConfirm(null)}
         >
           <div
             className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 p-6 flex flex-col gap-4 shadow-2xl"
@@ -861,8 +960,9 @@ export default function CampusMonitoring() {
                       You are about to permanently remove the report for{" "}
                       <span className="font-bold text-slate-800">
                         {confirmReport.title}
-                      </span>
-                      . This action cannot be undone.
+                      </span>{" "}
+                      and its attached photo or audio. This action cannot be
+                      undone.
                     </>
                   ) : (
                     <>
@@ -881,21 +981,32 @@ export default function CampusMonitoring() {
             <div className="flex items-center gap-2 pt-2">
               <button
                 onClick={() => setConfirm(null)}
-                className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-colors"
+                disabled={Boolean(busy)}
+                className="flex-1 px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-semibold hover:bg-slate-50 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirm}
-                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-rose-600/20 transition-all"
+                disabled={Boolean(busy)}
+                aria-busy={Boolean(busy)}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-md shadow-rose-600/20 transition-all disabled:cursor-not-allowed disabled:opacity-70"
               >
-                {confirm.type === "delete" ? (
+                {busy ? (
+                  <Spinner className="w-3.5 h-3.5" />
+                ) : confirm.type === "delete" ? (
                   <Trash2 className="w-3.5 h-3.5" />
                 ) : (
                   <XCircle className="w-3.5 h-3.5" />
                 )}
                 <span>
-                  {confirm.type === "delete" ? "Yes, delete" : "Yes, decline"}
+                  {confirm.type === "delete"
+                    ? busy
+                      ? "Deleting..."
+                      : "Yes, delete"
+                    : busy
+                      ? "Declining..."
+                      : "Yes, decline"}
                 </span>
               </button>
             </div>

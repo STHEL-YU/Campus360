@@ -29,6 +29,8 @@ const NEWS_IMAGE_PATH_PATTERN = /^news\/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png)$/i;
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const BLOB_TOKEN = process.env.CAMPUS_BLOB_READ_WRITE_TOKEN;
 const blobAuth = BLOB_TOKEN ? { token: BLOB_TOKEN } : {};
+// Campus dates are shown in Philippine time, not UTC
+const CAMPUS_TIME_ZONE = "Asia/Manila";
 const ANNOUNCEMENT_TYPES = new Set([
   "Announcement",
   "Campaign",
@@ -162,12 +164,15 @@ function serializeAnnouncement(announcement) {
     imageUrl: announcement.image_path
       ? `/api/news/image-content?id=${encodeURIComponent(String(announcement.id))}`
       : null,
-    publishedAt: publishedAt.toISOString().slice(0, 10),
+    // YYYY-MM-DD in Philippine time
+    publishedAt: publishedAt.toLocaleDateString("en-CA", {
+      timeZone: CAMPUS_TIME_ZONE,
+    }),
     published: publishedAt.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
-      timeZone: "UTC",
+      timeZone: CAMPUS_TIME_ZONE,
     }),
   };
 }

@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Users,
   Bell,
+  BellRing,
   ChevronRight,
   ChevronLeft,
   Clock,
@@ -26,7 +27,7 @@ const ROUTES = {
   news: "/news",
 };
 
-//  Notification sounds 
+// Notification sounds
 const SOUNDS = {
   incident: Array.from({ length: 10 }, (_, i) => ({
     freq: i % 2 === 0 ? 880 : 660,
@@ -94,6 +95,13 @@ const KIND_STYLES = {
     wrap: "bg-rose-50 text-rose-600",
     border: "border-rose-200",
     to: ROUTES.reports,
+  },
+  alert: {
+    label: "New alert",
+    icon: AlertCircle,
+    wrap: "bg-red-50 text-red-600",
+    border: "border-red-200",
+    to: ROUTES.news,
   },
   announcement: {
     label: "New announcement",
@@ -175,6 +183,36 @@ const buildMonthCells = (year, month) => {
   return cells;
 };
 
+// Real phone / desktop notification (goes through the service worker so it
+// works on Android Chrome too)
+const showSystemNotification = async ({ title, body, url, kind }) => {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+
+  const urgent = kind === "incident" || kind === "alert";
+  const options = {
+    body,
+    icon: "/icon-192.png", // put your icon in /public (optional)
+    badge: "/icon-192.png",
+    tag: `${kind}-${Date.now()}`,
+    renotify: true,
+    vibrate: urgent ? [300, 100, 300, 100, 300, 100, 300] : [200, 100, 200],
+    requireInteraction: urgent,
+    data: { url },
+  };
+
+  try {
+    const reg =
+      "serviceWorker" in navigator
+        ? await navigator.serviceWorker.getRegistration()
+        : null;
+    if (reg) await reg.showNotification(title, options);
+    else new Notification(title, options);
+  } catch (err) {
+    console.error("Notification failed:", err);
+  }
+};
+
 async function requestDashboardData(signal) {
   const headers = { "X-Campus360-Admin": "1" };
 
@@ -195,16 +233,16 @@ async function requestDashboardData(signal) {
 
   const [usersResponse, announcementsResponse, reportsResponse, alerts] =
     await Promise.all([
-    fetch("/api/student/admin-students", {
-      credentials: "same-origin",
-      headers,
-      signal,
-    }),
-    fetch("/api/news/announcements", {
-      credentials: "same-origin",
-      headers,
-      signal,
-    }),
+      fetch("/api/student/admin-students", {
+        credentials: "same-origin",
+        headers,
+        signal,
+      }),
+      fetch("/api/news/announcements", {
+        credentials: "same-origin",
+        headers,
+        signal,
+      }),
       fetch("/api/student/admin-reports", {
         credentials: "same-origin",
         headers,
@@ -270,7 +308,8 @@ function mapDashboardIncident(report) {
   return {
     id: report.reportNumber || `REP-${report.id}`,
     category: report.category || "Incident report",
-    location: [report.building, report.location].filter(Boolean).join(" · ") ||
+    location:
+      [report.building, report.location].filter(Boolean).join(" · ") ||
       "Location not provided",
     time: Number.isNaN(submittedAt.getTime())
       ? "Time unavailable"
@@ -305,7 +344,6 @@ function mapDashboardAlert(alert) {
         }),
   };
 }
-
 
 const useNow = () => {
   const [now, setNow] = useState(() => new Date());
@@ -421,7 +459,6 @@ function AnnouncementImage({ src }) {
   );
 }
 
-
 export default function Dashboard({ onNavigate }) {
   const go = (path) => {
     if (!path) return;
@@ -436,7 +473,6 @@ export default function Dashboard({ onNavigate }) {
   });
 
   const [incidents, setIncidents] = useState([]);
- 
   const [announcements, setAnnouncements] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -444,12 +480,38 @@ export default function Dashboard({ onNavigate }) {
   const [hasLoadedDashboardData, setHasLoadedDashboardData] = useState(false);
   const [dashboardDataError, setDashboardDataError] = useState("");
 
-  // Toasts + sound
+  // Toasts + sound (sound is ON by default, remembered in localStorage)
   const [toasts, setToasts] = useState([]);
-  const [soundOn, setSoundOn] = useState(false);
-  const soundRef = useRef(false);
+  const [soundOn, setSoundOn] = useState(() => {
+    try {
+      return localStorage.getItem("campus360.sound") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const soundRef = useRef(soundOn);
   const audioCtxRef = useRef(null);
+  const [notifPermission, setNotifPermission] = useState(() =>
+    typeof Notification === "undefined"
+      ? "unsupported"
+      : Notification.permission,
+  );
+  // Ids already seen per kind (null = first load not done yet)
+  const seenRef = useRef({
+    incident: null,
+    alert: null,
+    announcement: null,
+    account: null,
+  });
+  const notifyRef = useRef(() => {});
   const seq = useRef({ incident: 84, announcement: 0, account: 0 });
+
+  // Register the service worker used for real notifications
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -460,36 +522,47 @@ export default function Dashboard({ onNavigate }) {
       refreshInFlight = true;
       try {
         const result = await requestDashboardData(controller.signal);
-        setIncidents(result.reports.map(mapDashboardIncident));
-        setAccounts(
-          result.users.map((user) => ({
-            id: user.id,
-            name: user.name,
-            type: user.accountType,
-            college: user.college,
-            time: user.submitted,
-            status: user.status,
+
+        const mappedIncidents = result.reports.map(mapDashboardIncident);
+        const mappedAccounts = result.users.map((user) => ({
+          id: user.id,
+          name: user.name,
+          type: user.accountType,
+          college: user.college,
+          time: user.submitted,
+          status: user.status,
+          isNew: false,
+        }));
+        const mappedAnnouncements = result.announcements
+          .filter((announcement) => announcement.status === "Published")
+          .map((announcement) => ({
+            id: announcement.id,
+            title: announcement.title,
+            audience: announcement.audience,
+            time: announcement.published,
+            imageUrl: announcement.imageUrl,
+            createdAt:
+              new Date(
+                announcement.publishedAtTime || announcement.publishedAt,
+              ).getTime() || 0,
+            sortId: Number(announcement.id) || 0,
             isNew: false,
-          })),
-        );
-        setAnnouncements(
-          result.announcements
-            .filter((announcement) => announcement.status === "Published")
-            .map((announcement) => ({
-              id: announcement.id,
-              title: announcement.title,
-              audience: announcement.audience,
-              time: announcement.published,
-              imageUrl: announcement.imageUrl,
-              createdAt:
-                new Date(
-                  announcement.publishedAtTime || announcement.publishedAt,
-                ).getTime() || 0,
-              sortId: Number(announcement.id) || 0,
-              isNew: false,
-            })),
-        );
-        setAlerts(result.alerts.map(mapDashboardAlert));
+          }));
+        const mappedAlerts = result.alerts.map(mapDashboardAlert);
+
+        setIncidents(mappedIncidents);
+        setAccounts(mappedAccounts);
+        setAnnouncements(mappedAnnouncements);
+        setAlerts(mappedAlerts);
+
+        // Sound + toast + phone notification for anything new
+        notifyRef.current({
+          incidents: mappedIncidents,
+          accounts: mappedAccounts,
+          announcements: mappedAnnouncements,
+          alerts: mappedAlerts,
+        });
+
         setHasLoadedDashboardData(true);
         setDashboardDataError("");
       } catch (error) {
@@ -546,7 +619,7 @@ export default function Dashboard({ onNavigate }) {
     { name: "Education", count: 29, width: "42%" },
   ];
 
-  // Sound 
+  // Sound
   const getAudioContext = () => {
     if (!audioCtxRef.current) {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -594,10 +667,45 @@ export default function Dashboard({ onNavigate }) {
     const next = !soundOn;
     setSoundOn(next);
     soundRef.current = next;
-    if (next) getAudioContext(); 
+    try {
+      localStorage.setItem("campus360.sound", next ? "on" : "off");
+    } catch {
+      /* ignore */
+    }
+    if (next) {
+      getAudioContext();
+      playSound("announcement"); // quick preview
+    }
   };
 
-  // Toasts 
+  // Browsers block audio until the first click/tap, so unlock it on first interaction
+  useEffect(() => {
+    const events = ["pointerdown", "keydown", "touchstart"];
+    const unlock = () => {
+      getAudioContext();
+      events.forEach((e) => window.removeEventListener(e, unlock));
+    };
+    events.forEach((e) => window.addEventListener(e, unlock));
+    return () => events.forEach((e) => window.removeEventListener(e, unlock));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const enableNotifications = async () => {
+    if (typeof Notification === "undefined") return;
+    const result = await Notification.requestPermission();
+    setNotifPermission(result);
+    if (result === "granted") {
+      showSystemNotification({
+        title: "Notifications enabled",
+        body: "You will be alerted for new reports, alerts and accounts.",
+        url: "/",
+        kind: "announcement",
+      });
+      playSound("announcement");
+    }
+  };
+
+  // Toasts
   const pushToast = (kind, detail) => {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts((prev) => [{ id, kind, detail }, ...prev].slice(0, 4));
@@ -622,7 +730,73 @@ export default function Dashboard({ onNavigate }) {
     );
   };
 
-  // Incoming events 
+  // Called after every 15s refresh: finds what is new and alerts the admin
+  const handleIncoming = ({
+    incidents: incomingIncidents,
+    accounts: incomingAccounts,
+    announcements: incomingAnnouncements,
+    alerts: incomingAlerts,
+  }) => {
+    // First load only records what already exists, so nothing fires on page open
+    const diff = (kind, items) => {
+      const seen = seenRef.current[kind];
+      seenRef.current[kind] = new Set(items.map((i) => i.id));
+      return seen === null ? [] : items.filter((i) => !seen.has(i.id));
+    };
+
+    const freshIncidents = diff(
+      "incident",
+      incomingIncidents.filter((i) => i.status === "New"),
+    );
+    const freshAlerts = diff("alert", incomingAlerts);
+    const freshAnnouncements = diff("announcement", incomingAnnouncements);
+    const freshAccounts = diff(
+      "account",
+      incomingAccounts.filter((a) => a.status === "Pending"),
+    );
+
+    const fire = (kind, title, detail, url) => {
+      pushToast(kind, detail);
+      showSystemNotification({ title, body: detail, url, kind });
+    };
+
+    freshIncidents.forEach((i) =>
+      fire(
+        "incident",
+        "New incident report",
+        `${i.category} at ${i.location}`,
+        ROUTES.reports,
+      ),
+    );
+    freshAlerts.forEach((a) =>
+      fire(
+        "alert",
+        `${a.level === "red" ? "Red" : "Yellow"} alert`,
+        a.title,
+        ROUTES.news,
+      ),
+    );
+    freshAnnouncements.forEach((a) =>
+      fire("announcement", "New announcement", a.title, ROUTES.news),
+    );
+    freshAccounts.forEach((a) =>
+      fire(
+        "account",
+        "New account registered",
+        `${a.name} (${a.type}) is waiting for approval`,
+        ROUTES.users,
+      ),
+    );
+
+    // One sound per batch, most urgent wins
+    if (freshIncidents.length || freshAlerts.length) playSound("incident");
+    else if (freshAnnouncements.length) playSound("announcement");
+    else if (freshAccounts.length) playSound("account");
+  };
+  // Reassigned every render so the polling effect always calls the latest version
+  notifyRef.current = handleIncoming;
+
+  // Manual test events (also fire the phone notification)
   const addIncident = (data) => {
     const n = seq.current.incident++;
     const pick = data || INCIDENT_POOL[n % INCIDENT_POOL.length];
@@ -643,6 +817,12 @@ export default function Dashboard({ onNavigate }) {
     setIncidents((prev) => [incident, ...prev]);
     expireNew(setIncidents, incident.id);
     pushToast("incident", `${incident.category} at ${incident.location}`);
+    showSystemNotification({
+      title: "New incident report",
+      body: `${incident.category} at ${incident.location}`,
+      url: ROUTES.reports,
+      kind: "incident",
+    });
     playSound("incident");
   };
 
@@ -663,6 +843,12 @@ export default function Dashboard({ onNavigate }) {
     setAnnouncements((prev) => [announcement, ...prev]);
     expireNew(setAnnouncements, announcement.id);
     pushToast("announcement", announcement.title);
+    showSystemNotification({
+      title: "New announcement",
+      body: announcement.title,
+      url: ROUTES.news,
+      kind: "announcement",
+    });
     playSound("announcement");
   };
 
@@ -686,6 +872,12 @@ export default function Dashboard({ onNavigate }) {
       "account",
       `${account.name} (${account.type}) is waiting for approval`,
     );
+    showSystemNotification({
+      title: "New account registered",
+      body: `${account.name} (${account.type}) is waiting for approval`,
+      url: ROUTES.users,
+      kind: "account",
+    });
     playSound("account");
   };
 
@@ -696,7 +888,9 @@ export default function Dashboard({ onNavigate }) {
   );
 
   const newCount = (items) => items.filter((i) => i.isNew).length;
-  const newIncidents = incidents.filter((incident) => incident.status === "New");
+  const newIncidents = incidents.filter(
+    (incident) => incident.status === "New",
+  );
 
   // Calendar
   const calCells = buildMonthCells(calView.year, calView.month);
@@ -823,7 +1017,8 @@ export default function Dashboard({ onNavigate }) {
                 Live campus status
               </span>
 
-              {/* {DEMO_MODE && (
+              {/* Remove DEMO_MODE (set false) to hide the test buttons */}
+              {DEMO_MODE && false && (
                 <>
                   <button
                     onClick={() => addIncident()}
@@ -844,7 +1039,29 @@ export default function Dashboard({ onNavigate }) {
                     Test account
                   </button>
                 </>
-              )} */}
+              )}
+
+              {notifPermission !== "unsupported" && (
+                <button
+                  onClick={enableNotifications}
+                  disabled={
+                    notifPermission === "granted" ||
+                    notifPermission === "denied"
+                  }
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${
+                    notifPermission === "granted"
+                      ? "bg-emerald-600 border-emerald-600 text-white"
+                      : "bg-white border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  <BellRing className="w-3.5 h-3.5" />
+                  {notifPermission === "granted"
+                    ? "Notifications on"
+                    : notifPermission === "denied"
+                      ? "Blocked in browser"
+                      : "Enable notifications"}
+                </button>
+              )}
 
               <button
                 onClick={toggleSound}
@@ -875,7 +1092,7 @@ export default function Dashboard({ onNavigate }) {
         )}
 
         <div className="grid grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
-          {/*Main dashboard  */}
+          {/* Main dashboard */}
           <div className="flex flex-col gap-6 min-w-0">
             {/* Metric Cards Grid */}
             <div className="grid grid-cols-5 gap-4">
@@ -994,7 +1211,7 @@ export default function Dashboard({ onNavigate }) {
               </div>
             </div>
 
-            {/* Incident reports  + Reports by college */}
+            {/* Incident reports + Reports by college */}
             <div className="grid grid-cols-3 gap-6">
               <div className="col-span-2 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between shadow-2xs">
                 <div className="flex items-center justify-between mb-4">
@@ -1074,54 +1291,56 @@ export default function Dashboard({ onNavigate }) {
                             No new incident reports need review.
                           </td>
                         </tr>
-                      ) : newIncidents.slice(0, 5).map((incident) => (
-                        <tr
-                          key={incident.id}
-                          onClick={() => go(ROUTES.reports)}
-                          className={`transition-colors cursor-pointer ${
-                            incident.isNew
-                              ? "bg-rose-50/60"
-                              : "hover:bg-slate-50/60"
-                          }`}
-                        >
-                          <td className="py-3.5 font-semibold text-slate-900">
-                            <div className="flex items-center gap-2">
-                              {incident.id}
-                              {incident.isNew && <NewPill />}
-                            </div>
-                          </td>
-                          <td className="py-3.5 text-slate-600">
-                            {incident.reporter}
-                          </td>
-                          <td className="py-3.5 text-slate-600">
-                            {incident.category}
-                          </td>
-                          <td className="py-3.5 text-slate-600">
-                            {incident.location}
-                          </td>
-                          <td className="py-3.5 text-slate-500">
-                            {incident.time}
-                          </td>
-                          <td className="py-3.5">
-                            <span
-                              className={`px-2.5 py-1 rounded-full font-semibold text-[10px] ${incident.statusColor}`}
-                            >
-                              {incident.status}
-                            </span>
-                          </td>
-                          <td className="py-3.5 text-right">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                go(ROUTES.reports);
-                              }}
-                              className="px-3 py-1 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg font-semibold text-xs transition-colors"
-                            >
-                              View
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      ) : (
+                        newIncidents.slice(0, 5).map((incident) => (
+                          <tr
+                            key={incident.id}
+                            onClick={() => go(ROUTES.reports)}
+                            className={`transition-colors cursor-pointer ${
+                              incident.isNew
+                                ? "bg-rose-50/60"
+                                : "hover:bg-slate-50/60"
+                            }`}
+                          >
+                            <td className="py-3.5 font-semibold text-slate-900">
+                              <div className="flex items-center gap-2">
+                                {incident.id}
+                                {incident.isNew && <NewPill />}
+                              </div>
+                            </td>
+                            <td className="py-3.5 text-slate-600">
+                              {incident.reporter}
+                            </td>
+                            <td className="py-3.5 text-slate-600">
+                              {incident.category}
+                            </td>
+                            <td className="py-3.5 text-slate-600">
+                              {incident.location}
+                            </td>
+                            <td className="py-3.5 text-slate-500">
+                              {incident.time}
+                            </td>
+                            <td className="py-3.5">
+                              <span
+                                className={`px-2.5 py-1 rounded-full font-semibold text-[10px] ${incident.statusColor}`}
+                              >
+                                {incident.status}
+                              </span>
+                            </td>
+                            <td className="py-3.5 text-right">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  go(ROUTES.reports);
+                                }}
+                                className="px-3 py-1 bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 rounded-lg font-semibold text-xs transition-colors"
+                              >
+                                View
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1265,7 +1484,7 @@ export default function Dashboard({ onNavigate }) {
             </div>
           </div>
 
-          {/* News, time, calendar*/}
+          {/* News, time, calendar */}
           <div className="flex flex-col gap-6 min-w-0">
             {/* News & announcements */}
             <aside className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-col gap-4 shadow-2xs">

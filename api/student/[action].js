@@ -1,10 +1,12 @@
 import process from "node:process";
 import { Readable } from "node:stream";
-import { BlobNotFoundError, get, head } from "@vercel/blob";
+import { BlobNotFoundError, del, get, head } from "@vercel/blob";
 import { handleUpload } from "@vercel/blob/client";
 import {
   deleteStudentForAdmin,
   createIncidentReport,
+  deleteIncidentReportForStudent,
+  deleteIncidentReportForAdmin,
   findIncidentReportEvidenceForStudent,
   findActiveAdminById,
   findIncidentReportEvidenceForAdmin,
@@ -15,6 +17,7 @@ import {
   listIncidentReportsForAdmin,
   listIncidentReportsForStudent,
   listStudentsForAdmin,
+  updateIncidentReportForStudent,
   updateIncidentReportStatusForAdmin,
   updateStudentForAdmin,
   updateStudentProfileImage,
@@ -348,6 +351,42 @@ function parseIncidentReport(body) {
   };
 }
 
+// Fields a student may change on a report they already submitted
+function parseIncidentReportUpdate(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { error: "A JSON request body is required" };
+  }
+
+  const category =
+    typeof body.category === "string" &&
+    Object.hasOwn(INCIDENT_CATEGORIES, body.category)
+      ? INCIDENT_CATEGORIES[body.category]
+      : null;
+  if (!category) {
+    return { error: "Select a valid incident category" };
+  }
+  if (!isNonEmptyString(body.building) || body.building.trim().length > 200) {
+    return { error: "Enter a valid building" };
+  }
+  if (
+    (body.location !== undefined &&
+      (typeof body.location !== "string" || body.location.length > 200)) ||
+    (body.description !== undefined &&
+      (typeof body.description !== "string" || body.description.length > 10000))
+  ) {
+    return { error: "Location or description is too long" };
+  }
+
+  return {
+    update: {
+      category,
+      building: body.building.trim(),
+      location: body.location?.trim() || "",
+      description: body.description?.trim() || "",
+    },
+  };
+}
+
 function serializeIncidentReport(report) {
   const submittedAt = new Date(report.created_at).toISOString();
   return {
@@ -382,8 +421,8 @@ function serializeIncidentReport(report) {
 }
 
 async function handleStudentIncidentReport(req, res) {
-  if (req.method !== "GET" && req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST");
+  if (!["GET", "POST", "PATCH", "DELETE"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST, PATCH, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
@@ -411,6 +450,59 @@ async function handleStudentIncidentReport(req, res) {
       return res.status(200).json({
         reports: reports.map(serializeIncidentReport),
       });
+    }
+
+    if (req.method === "PATCH") {
+      const id = parseId(req.body?.id);
+      if (!id) {
+        return res.status(400).json({ error: "A valid report ID is required" });
+      }
+      const { update, error: updateError } = parseIncidentReportUpdate(
+        req.body,
+      );
+      if (updateError) return res.status(400).json({ error: updateError });
+
+      const updated = await updateIncidentReportForStudent(
+        id,
+        studentId,
+        update,
+      );
+      if (!updated) {
+        return res.status(404).json({
+          error: "Report not found, or it can no longer be edited",
+        });
+      }
+      return res.status(200).json({
+        report: serializeIncidentReport(updated),
+      });
+    }
+
+    if (req.method === "DELETE") {
+      const id = parseId(req.body?.id);
+      if (!id) {
+        return res.status(400).json({ error: "A valid report ID is required" });
+      }
+
+      const deleted = await deleteIncidentReportForStudent(id, studentId);
+      if (!deleted) {
+        return res.status(404).json({
+          error: "Report not found, or it can no longer be deleted",
+        });
+      }
+
+      // Remove the attached files too (best effort; the report is already gone)
+      const evidencePaths = [deleted.image_path, deleted.audio_path].filter(
+        Boolean,
+      );
+      if (BLOB_TOKEN && evidencePaths.length > 0) {
+        try {
+          await del(evidencePaths, { ...blobAuth });
+        } catch (blobError) {
+          console.error("Report evidence cleanup failed", blobError);
+        }
+      }
+
+      return res.status(200).json({ deletedId: String(deleted.id) });
     }
 
     const { report, error } = parseIncidentReport(req.body);
@@ -450,6 +542,7 @@ async function handleStudentIncidentReport(req, res) {
             )
           : true,
       ]);
+
       if (evidenceIsValid.includes(false)) {
         return res.status(400).json({
           error: "Report evidence is missing or has an unsupported format",
@@ -502,7 +595,9 @@ async function handleStudentReportEvidence(req, res) {
   }
   if (!BLOB_TOKEN) {
     console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
-    return res.status(503).json({ error: "Report evidence storage is unavailable" });
+    return res
+      .status(503)
+      .json({ error: "Report evidence storage is unavailable" });
   }
 
   try {
@@ -518,13 +613,12 @@ async function handleStudentReportEvidence(req, res) {
     );
     const pathname = kind === "image" ? report?.image_path : report?.audio_path;
     const contentTypes =
-      kind === "image" ? REPORT_IMAGE_CONTENT_TYPES : REPORT_AUDIO_CONTENT_TYPES;
+      kind === "image"
+        ? REPORT_IMAGE_CONTENT_TYPES
+        : REPORT_AUDIO_CONTENT_TYPES;
     const maxSize =
       kind === "image" ? MAX_REPORT_IMAGE_SIZE : MAX_REPORT_AUDIO_SIZE;
-    if (
-      !pathname ||
-      !isOwnedReportEvidencePath(pathname, studentId, kind)
-    ) {
+    if (!pathname || !isOwnedReportEvidencePath(pathname, studentId, kind)) {
       return res.status(404).json({ error: "Report evidence not found" });
     }
 
@@ -699,6 +793,71 @@ async function handleAdminReportStatus(req, res) {
   }
 }
 
+async function handleAdminReportDelete(req, res) {
+  if (req.method !== "DELETE") {
+    res.setHeader("Allow", "DELETE");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (req.headers["x-campus360-admin"] !== "1") {
+    return res.status(403).json({ error: "Invalid admin request" });
+  }
+
+  const id = parseId(req.body?.id);
+  if (!id) {
+    return res.status(400).json({ error: "A valid report ID is required" });
+  }
+
+  let adminId;
+  try {
+    adminId = getAdminSessionAdminId(req);
+  } catch (error) {
+    console.error("Admin session validation failed", error);
+    return res.status(500).json({ error: "Admin session is not configured" });
+  }
+  if (!adminId) {
+    return res.status(401).json({ error: "Admin sign-in is required" });
+  }
+
+  try {
+    const admin = await findActiveAdminById(adminId);
+    if (!admin) {
+      clearAdminSessionCookie(res);
+      return res.status(401).json({ error: "Admin sign-in is required" });
+    }
+    if (!isNonEmptyString(admin.college)) {
+      return res.status(403).json({ error: "Admin college is not configured" });
+    }
+
+    const deleted = await deleteIncidentReportForAdmin(id, admin.college);
+    if (!deleted) {
+      return res.status(404).json({ error: "Incident report not found" });
+    }
+
+    const evidencePaths = [deleted.image_path, deleted.audio_path].filter(
+      (pathname) => {
+        const match =
+          typeof pathname === "string"
+            ? REPORT_EVIDENCE_PATH_PATTERN.exec(pathname)
+            : null;
+        return match && match[1] === String(deleted.id);
+      },
+    );
+    if (BLOB_TOKEN && evidencePaths.length > 0) {
+      try {
+        await del(evidencePaths, { ...blobAuth });
+      } catch (blobError) {
+        console.error("Report evidence cleanup failed", blobError);
+      }
+    }
+
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).json({ deletedId: String(deleted.id) });
+  } catch (error) {
+    console.error("Admin incident report deletion failed", error);
+    return res.status(500).json({ error: "Unable to delete incident report" });
+  }
+}
+
 async function handleAdminReportEvidence(req, res) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -744,7 +903,9 @@ async function handleAdminReportEvidence(req, res) {
     );
     const pathname = kind === "image" ? report?.image_path : report?.audio_path;
     const contentTypes =
-      kind === "image" ? REPORT_IMAGE_CONTENT_TYPES : REPORT_AUDIO_CONTENT_TYPES;
+      kind === "image"
+        ? REPORT_IMAGE_CONTENT_TYPES
+        : REPORT_AUDIO_CONTENT_TYPES;
     const maxSize =
       kind === "image" ? MAX_REPORT_IMAGE_SIZE : MAX_REPORT_AUDIO_SIZE;
     const pathMatch =
@@ -1019,7 +1180,9 @@ async function handleReportEvidenceUpload(req, res) {
   }
   if (!BLOB_TOKEN) {
     console.error("CAMPUS_BLOB_READ_WRITE_TOKEN is not configured");
-    return res.status(503).json({ error: "Report evidence storage is unavailable" });
+    return res
+      .status(503)
+      .json({ error: "Report evidence storage is unavailable" });
   }
 
   let studentId;
@@ -1041,7 +1204,9 @@ async function handleReportEvidenceUpload(req, res) {
     }
 
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
-      return res.status(400).json({ error: "A valid upload request is required" });
+      return res
+        .status(400)
+        .json({ error: "A valid upload request is required" });
     }
 
     const result = await handleUpload({
@@ -1256,6 +1421,9 @@ export default async function handler(req, res) {
 
   if (action === "admin-report-status") {
     return handleAdminReportStatus(req, res);
+  }
+  if (action === "admin-report-delete") {
+    return handleAdminReportDelete(req, res);
   }
 
   if (action === "admin-report-evidence") {

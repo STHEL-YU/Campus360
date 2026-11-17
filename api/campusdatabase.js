@@ -167,18 +167,20 @@ async function ensureNewsTable() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
-    `).then(() =>
-      query(`
+    `)
+      .then(() =>
+        query(`
         ALTER TABLE public.news_announcements
           ADD COLUMN IF NOT EXISTS event_at TIMESTAMPTZ,
           ADD COLUMN IF NOT EXISTS target_college TEXT,
           ADD COLUMN IF NOT EXISTS image_path TEXT,
           ADD COLUMN IF NOT EXISTS image_url TEXT
       `),
-    ).catch((error) => {
-      newsSchemaPromise = undefined;
-      throw error;
-    });
+      )
+      .catch((error) => {
+        newsSchemaPromise = undefined;
+        throw error;
+      });
   }
 
   await newsSchemaPromise;
@@ -353,6 +355,63 @@ export async function listIncidentReportsForStudent(studentId) {
   );
 
   return result.rows;
+}
+
+// A student can change a report only while it is still open
+// (not yet Resolved or Declined by an admin).
+export async function updateIncidentReportForStudent(
+  id,
+  studentId,
+  { category, building, location, description },
+) {
+  await ensureIncidentReportsTable();
+
+  const result = await query(
+    `UPDATE public.incident_reports
+     SET category = $3, building = $4, location = $5, description = $6,
+         updated_at = NOW()
+     WHERE id = $1
+       AND student_id = $2
+       AND LOWER(status) = 'new'
+     RETURNING id, category, college, building, location, description, status,
+               created_at, updated_at, pin_x, pin_y, image_path, audio_path,
+               is_anonymous`,
+    [id, studentId, category, building, location, description],
+  );
+
+  return result.rows[0] || null;
+}
+
+export async function deleteIncidentReportForStudent(id, studentId) {
+  await ensureIncidentReportsTable();
+
+  const result = await query(
+    `DELETE FROM public.incident_reports
+     WHERE id = $1
+       AND student_id = $2
+       AND LOWER(status) IN ('new', 'resolved', 'declined')
+     RETURNING id, image_path, audio_path`,
+    [id, studentId],
+  );
+
+  return result.rows[0] || null;
+}
+
+export async function deleteIncidentReportForAdmin(id, college) {
+  await ensureIncidentReportsTable();
+
+  const result = await query(
+    `DELETE FROM public.incident_reports
+     WHERE id = $1
+       AND (
+         college = $2
+         OR ($2 = 'College of Nursing and Health Sciences' AND college = 'College of Nursing')
+       )
+     RETURNING id, image_path, audio_path`,
+    [id, college],
+  );
+
+  return result.rows[0] || null;
 }
 
 export async function updateIncidentReportStatusForAdmin({
@@ -703,16 +762,20 @@ export async function createNewsAnnouncement({
   return result.rows[0];
 }
 
-export async function updateNewsAnnouncement(id, {
-  title,
-  type,
-  audience,
-  content,
-  eventAt,
-  targetCollege,
-  imagePath,
-  imageUrl,
-}, college) {
+export async function updateNewsAnnouncement(
+  id,
+  {
+    title,
+    type,
+    audience,
+    content,
+    eventAt,
+    targetCollege,
+    imagePath,
+    imageUrl,
+  },
+  college,
+) {
   await ensureNewsTable();
 
   const result = await query(

@@ -3,6 +3,7 @@ import { getStudentProfile } from "../../auth";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
+  BellRing,
   ChevronRight,
   Clock,
   Volume2,
@@ -10,12 +11,57 @@ import {
 } from "lucide-react";
 
 const ALARM_SECONDS = 5;
-// vibrate, pause, vibrate... (about 4.6 seconds in total)
 const VIBRATION_PATTERN = [
   600, 200, 600, 200, 600, 200, 600, 200, 600, 200, 600,
 ];
+const SOUND_KEY = "campus360.student.sound";
 
-// Siren: one loud square-wave tone sweeping up and down for 5 seconds
+// Alarm is ON unless the student turned it off before
+function readSoundPreference() {
+  try {
+    return localStorage.getItem(SOUND_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+function saveSoundPreference(on) {
+  try {
+    localStorage.setItem(SOUND_KEY, on ? "on" : "off");
+  } catch {
+    /* ignore */
+  }
+}
+
+// Real phone notification, shown through the service worker (/sw.js) so it
+// also works on Android Chrome. Uses the phone's own notification sound.
+async function showSystemNotification({ title, body, url, urgent = false }) {
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted") return;
+
+  const options = {
+    body,
+    icon: "/icon-192.png", // put your icon in /public (optional)
+    badge: "/icon-192.png",
+    tag: `campus360-${Date.now()}`,
+    renotify: true,
+    vibrate: urgent ? VIBRATION_PATTERN : [200, 100, 200],
+    requireInteraction: urgent,
+    data: { url },
+  };
+
+  try {
+    const registration =
+      "serviceWorker" in navigator
+        ? await navigator.serviceWorker.getRegistration()
+        : null;
+    if (registration) await registration.showNotification(title, options);
+    else new Notification(title, options);
+  } catch (error) {
+    console.error("Could not show notification", error);
+  }
+}
+
 async function playAlarmSound(context, onError) {
   try {
     if (context.state === "suspended") await context.resume();
@@ -72,6 +118,13 @@ function isAlertFromToday(value) {
   );
 }
 
+function getLocalDateString() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
 function formatAlertDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
@@ -84,7 +137,6 @@ function formatAlertDate(value) {
       });
 }
 
-// Skeleton card shown while the latest alert loads
 function AlertSkeleton() {
   return (
     <div
@@ -112,7 +164,6 @@ function AlertSkeleton() {
   );
 }
 
-// Skeleton card shown while campus news loads
 function NewsSkeleton() {
   return (
     <div
@@ -134,9 +185,9 @@ function NewsSkeleton() {
   );
 }
 
-// News image with a skeleton until it loads (falls back to the Campus360 banner)
+// News image with a skeleton until it loads
 function NewsImage({ src, alt }) {
-  const [status, setStatus] = useState("loading"); // loading | loaded | error
+  const [status, setStatus] = useState("loading");
   const imgRef = useRef(null);
 
   // Handles images already cached before onLoad could fire
@@ -194,42 +245,98 @@ export default function Dashboard({ onReportClick }) {
   const [alerts, setAlerts] = useState([]);
   const [areAlertsLoading, setAreAlertsLoading] = useState(true);
   const [alertsError, setAlertsError] = useState("");
-  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(readSoundPreference);
   const [soundError, setSoundError] = useState("");
+  const [notifPermission, setNotifPermission] = useState(() =>
+    typeof Notification === "undefined"
+      ? "unsupported"
+      : Notification.permission,
+  );
   const [newAlertIds, setNewAlertIds] = useState([]);
   const audioContextRef = useRef(null);
   const seenAlertIdsRef = useRef(null);
-  const soundEnabledRef = useRef(false);
+  const seenNewsIdsRef = useRef(null);
+  const soundEnabledRef = useRef(soundEnabled);
   const newAlertTimeoutRef = useRef(null);
+
+  // Creates (or recreates) the audio context and tries to resume it
+  const getAudioContext = () => {
+    const AudioContextConstructor =
+      window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) return null;
+    if (
+      !audioContextRef.current ||
+      audioContextRef.current.state === "closed"
+    ) {
+      audioContextRef.current = new AudioContextConstructor();
+    }
+    return audioContextRef.current;
+  };
 
   const toggleAlertSound = async () => {
     if (soundEnabledRef.current) {
       soundEnabledRef.current = false;
       setSoundEnabled(false);
-      return;
-    }
-
-    const AudioContextConstructor =
-      window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextConstructor) {
-      setSoundError("This browser does not support notification sounds.");
+      saveSoundPreference(false);
       return;
     }
 
     try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContextConstructor();
+      const context = getAudioContext();
+      if (!context) {
+        setSoundError("This browser does not support notification sounds.");
+        return;
       }
-      await audioContextRef.current.resume();
+      await context.resume();
       soundEnabledRef.current = true;
       setSoundEnabled(true);
+      saveSoundPreference(true);
       setSoundError("");
-      vibrateDevice(200); // short buzz to confirm it is on
+      vibrateDevice(200);
     } catch (error) {
       console.error("Could not enable campus alert sounds", error);
       setSoundError("Unable to enable notification sounds in this browser.");
     }
   };
+
+  const enableNotifications = async () => {
+    if (typeof Notification === "undefined") return;
+    const result = await Notification.requestPermission();
+    setNotifPermission(result);
+    if (result === "granted") {
+      showSystemNotification({
+        title: "Notifications enabled",
+        body: "You will be alerted when a new campus alert arrives.",
+        url: "/student",
+      });
+    }
+  };
+
+  // Register the service worker used for real phone notifications
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+  }, []);
+
+  // Browsers block sound until the first tap, so unlock audio on first touch
+  useEffect(() => {
+    const events = ["pointerdown", "touchstart", "keydown"];
+    const unlock = async () => {
+      events.forEach((name) => window.removeEventListener(name, unlock));
+      try {
+        const context = getAudioContext();
+        if (!context) return;
+        await context.resume();
+      } catch {
+        /* ignore */
+      }
+    };
+    events.forEach((name) => window.addEventListener(name, unlock));
+    return () =>
+      events.forEach((name) => window.removeEventListener(name, unlock));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -269,14 +376,24 @@ export default function Dashboard({ onReportClick }) {
             );
 
             vibrateDevice();
-            if (soundEnabledRef.current && audioContextRef.current) {
-              void playAlarmSound(audioContextRef.current, setSoundError);
+            if (soundEnabledRef.current) {
+              const context = getAudioContext();
+              if (context) void playAlarmSound(context, setSoundError);
             }
+
+            // Real phone notification (works with the screen off / app in background)
+            newlyReceived.slice(0, 3).forEach((alert) => {
+              const message = String(alert.message || "").slice(0, 140);
+              showSystemNotification({
+                title: alert.title || "Campus alert",
+                body: message || "Open Campus360 to read the alert.",
+                url: "/student/alerts",
+                urgent: true,
+              });
+            });
           }
         }
         seenAlertIdsRef.current = currentIds;
-
-        // Keep only the single newest alert from today
         const latestToday = result.alerts
           .filter((alert) => isAlertFromToday(alert.createdAt))
           .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -302,9 +419,11 @@ export default function Dashboard({ onReportClick }) {
       window.removeEventListener("focus", loadAlerts);
       window.clearTimeout(newAlertTimeoutRef.current);
       controller.abort();
-      if (audioContextRef.current?.state !== "closed") {
-        void audioContextRef.current?.close();
+      const context = audioContextRef.current;
+      if (context && context.state !== "closed") {
+        void context.close();
       }
+      audioContextRef.current = null;
     };
   }, []);
 
@@ -329,12 +448,38 @@ export default function Dashboard({ onReportClick }) {
           throw new Error("The server returned an invalid news feed.");
         }
 
-        const today = new Date().toISOString().slice(0, 10);
-        setTodayNews(
-          result.announcements
-            .filter((announcement) => announcement.publishedAt === today)
-            .slice(0, 3),
+        const today = getLocalDateString();
+        const todayItems = result.announcements.filter(
+          (announcement) => announcement.publishedAt === today,
         );
+
+        // Phone notification for announcements published after the page opened
+        const previousNewsIds = seenNewsIdsRef.current;
+        seenNewsIdsRef.current = new Set(todayItems.map((item) => item.id));
+        if (previousNewsIds) {
+          todayItems
+            .filter((item) => !previousNewsIds.has(item.id))
+            .slice(0, 3)
+            .forEach((item) => {
+              showSystemNotification({
+                title: "New campus announcement",
+                body: item.title || "Open Campus360 to read it.",
+                url: "/student/news",
+              });
+            });
+        }
+
+        const latestToday = todayItems
+          .sort((a, b) => {
+            const aTime = new Date(a.createdAt || a.publishedAt).getTime();
+            const bTime = new Date(b.createdAt || b.publishedAt).getTime();
+            return (
+              (Number.isNaN(bTime) ? 0 : bTime) -
+              (Number.isNaN(aTime) ? 0 : aTime)
+            );
+          })
+          .slice(0, 1);
+        setTodayNews(latestToday);
         setNewsError("");
       } catch (error) {
         if (error.name !== "AbortError") {
@@ -368,7 +513,7 @@ export default function Dashboard({ onReportClick }) {
               Student dashboard
             </span>
             <h1 className="text-2xl font-extrabold tracking-tight text-slate-900 mt-0.5">
-              Good morning, {firstName}!
+              Good day, {firstName}!
             </h1>
             <p className="text-xs font-medium text-slate-500 mt-0.5">
               {profile.college || "College"} · {profile.role || "Student"}
@@ -462,6 +607,27 @@ export default function Dashboard({ onReportClick }) {
               </Link>
             </div>
           </div>
+
+          {notifPermission !== "unsupported" &&
+            notifPermission !== "granted" && (
+              <button
+                type="button"
+                onClick={enableNotifications}
+                disabled={notifPermission === "denied"}
+                className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs font-semibold text-blue-700 disabled:opacity-60"
+              >
+                <BellRing className="h-4 w-4" />
+                {notifPermission === "denied"
+                  ? "Notifications are blocked in your browser settings"
+                  : "Turn on phone notifications for alerts"}
+              </button>
+            )}
+          {notifPermission === "granted" && (
+            <p className="flex items-center gap-1.5 text-[11px] font-medium text-emerald-700">
+              <BellRing className="h-3.5 w-3.5" />
+              Phone notifications are on
+            </p>
+          )}
 
           {soundError && (
             <p role="status" className="text-[11px] text-rose-600">
@@ -577,7 +743,6 @@ export default function Dashboard({ onReportClick }) {
               aria-label="Loading today's campus news"
               className="space-y-3"
             >
-              <NewsSkeleton />
               <NewsSkeleton />
             </div>
           ) : todayNews.length > 0 ? (

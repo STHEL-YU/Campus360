@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Shield, Upload, Mic, MapPin, LoaderCircle, X } from "lucide-react";
+import {
+  Shield,
+  Camera,
+  Mic,
+  MapPin,
+  LoaderCircle,
+  X,
+  Square,
+} from "lucide-react";
 import { getStudentProfile } from "../../auth";
 import { useLocation, useNavigate } from "react-router-dom";
-import ReportsList from "./studreportlist.jsx"; // adjust the path if the file is elsewhere
+import ReportsList from "./studreportlist.jsx";
 
-// Set to false to use your real map at /campus-map.png
 const USE_DUMMY_MAP = true;
 
 const DUMMY_MAP_SVG = `
@@ -39,6 +46,8 @@ const INITIAL_FORM_DATA = {
 };
 const MAX_IMAGE_SIZE = 3 * 1024 * 1024;
 const MAX_AUDIO_SIZE = 10 * 1024 * 1024;
+const MAX_RECORD_SECONDS = 15;
+const MAX_PHOTO_DIMENSION = 1280;
 const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png"];
 const ALLOWED_AUDIO_TYPES = [
   "audio/webm",
@@ -57,6 +66,23 @@ const AUDIO_EXTENSIONS = {
   "audio/x-wav": "wav",
 };
 
+// Picks a recording format this browser can make (Chrome/Android: webm, Safari: mp4)
+function pickRecorderMimeType() {
+  if (typeof MediaRecorder === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg",
+  ];
+  return candidates.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+}
+
+const formatClock = (seconds) => {
+  const whole = Math.floor(seconds);
+  return `0:${String(whole).padStart(2, "0")}`;
+};
+
 export default function ReportIncident() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -68,12 +94,21 @@ export default function ReportIncident() {
   const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
-  const imageInputRef = useRef(null);
-  const audioInputRef = useRef(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [audioPreview, setAudioPreview] = useState(null);
-  const showReports =
-    isReportsOpen || Boolean(location.state?.openReports);
+
+  // Camera + voice recording
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const videoRef = useRef(null);
+  const cameraStreamRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recordStreamRef = useRef(null);
+  const recordChunksRef = useRef([]);
+  const recordTimerRef = useRef(null);
+
+  const showReports = isReportsOpen || Boolean(location.state?.openReports);
   const closeReports = () => {
     setIsReportsOpen(false);
     if (location.state?.openReports) {
@@ -94,6 +129,68 @@ export default function ReportIncident() {
     [audioPreview],
   );
 
+  const stopCameraStream = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+  };
+
+  const stopRecordStream = () => {
+    recordStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordStreamRef.current = null;
+  };
+
+  // Turn the camera on while the camera screen is open, off when it closes
+  useEffect(() => {
+    if (!isCameraOpen) return undefined;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        cameraStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+      } catch (error) {
+        console.error("Could not open the camera", error);
+        if (!cancelled) {
+          setIsCameraOpen(false);
+          setEvidenceError(
+            "Unable to open the camera. Allow camera access and try again.",
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      stopCameraStream();
+    };
+  }, [isCameraOpen]);
+
+  // Stop everything if the student leaves the page mid-recording
+  useEffect(
+    () => () => {
+      window.clearInterval(recordTimerRef.current);
+      const recorder = recorderRef.current;
+      if (recorder) {
+        recorder.onstop = null;
+        if (recorder.state !== "inactive") recorder.stop();
+      }
+      stopRecordStream();
+      stopCameraStream();
+    },
+    [],
+  );
+
   const setEvidenceFile = (kind, file) => {
     if (!file) return;
     const allowedTypes =
@@ -103,28 +200,16 @@ export default function ReportIncident() {
       setEvidenceError(
         kind === "image"
           ? "Choose a JPG or PNG image."
-          : "Choose a supported audio file.",
+          : "This browser recorded an unsupported audio format.",
       );
-      if (kind === "image" && imageInputRef.current) {
-        imageInputRef.current.value = "";
-      }
-      if (kind === "audio" && audioInputRef.current) {
-        audioInputRef.current.value = "";
-      }
       return;
     }
     if (file.size <= 0 || file.size > maxSize) {
       setEvidenceError(
         kind === "image"
-          ? "Images must be smaller than 3 MB."
-          : "Audio files must be smaller than 10 MB.",
+          ? "Photos must be smaller than 3 MB."
+          : "Recordings must be smaller than 10 MB.",
       );
-      if (kind === "image" && imageInputRef.current) {
-        imageInputRef.current.value = "";
-      }
-      if (kind === "audio" && audioInputRef.current) {
-        audioInputRef.current.value = "";
-      }
       return;
     }
 
@@ -138,6 +223,155 @@ export default function ReportIncident() {
       setAudioPreview(URL.createObjectURL(file));
     }
   };
+
+  /* ---------- Take a picture ---------- */
+
+  const openCamera = () => {
+    setEvidenceError("");
+    setSubmitError("");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setEvidenceError(
+        "The camera is not available on this device or browser.",
+      );
+      return;
+    }
+    setIsCameraOpen(true);
+  };
+
+  const closeCamera = () => setIsCameraOpen(false);
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setEvidenceError("The camera is not ready yet. Try again.");
+      return;
+    }
+
+    // Shrink large photos so they stay under the 3 MB limit
+    const scale = Math.min(
+      1,
+      MAX_PHOTO_DIMENSION / Math.max(video.videoWidth, video.videoHeight),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          setEvidenceError("Unable to take the photo. Try again.");
+          return;
+        }
+        const file = new File([blob], `photo-${Date.now()}.jpg`, {
+          type: "image/jpeg",
+        });
+        setEvidenceFile("image", file);
+        setIsCameraOpen(false);
+      },
+      "image/jpeg",
+      0.85,
+    );
+  };
+
+  const removePhoto = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    setEvidenceError("");
+    setSubmitError("");
+  };
+
+  /* ---------- Record voice (max 15 seconds) ---------- */
+
+  const stopRecording = () => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  };
+
+  const startRecording = async () => {
+    if (isRecording) return;
+    setEvidenceError("");
+    setSubmitError("");
+
+    if (
+      !navigator.mediaDevices?.getUserMedia ||
+      typeof MediaRecorder === "undefined"
+    ) {
+      setEvidenceError("Voice recording is not supported on this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordStreamRef.current = stream;
+
+      const mimeType = pickRecorderMimeType();
+      const recorder = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined,
+      );
+      recordChunksRef.current = [];
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        window.clearInterval(recordTimerRef.current);
+        stopRecordStream();
+        setIsRecording(false);
+
+        const baseType = (recorder.mimeType || mimeType || "audio/webm").split(
+          ";",
+        )[0];
+        const blob = new Blob(recordChunksRef.current, { type: baseType });
+        recordChunksRef.current = [];
+        if (blob.size === 0) {
+          setEvidenceError("Nothing was recorded. Try again.");
+          return;
+        }
+        const extension = AUDIO_EXTENSIONS[baseType] || "webm";
+        const file = new File([blob], `voice-${Date.now()}.${extension}`, {
+          type: baseType,
+        });
+        setEvidenceFile("audio", file);
+      };
+
+      // A new recording replaces the previous one
+      setAudioFile(null);
+      setAudioPreview(null);
+
+      recorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setRecordSeconds(0);
+
+      const startedAt = Date.now();
+      recordTimerRef.current = window.setInterval(() => {
+        const elapsed = (Date.now() - startedAt) / 1000;
+        setRecordSeconds(Math.min(elapsed, MAX_RECORD_SECONDS));
+        if (elapsed >= MAX_RECORD_SECONDS) stopRecording();
+      }, 200);
+    } catch (error) {
+      console.error("Could not start recording", error);
+      stopRecordStream();
+      setIsRecording(false);
+      setEvidenceError(
+        "Unable to use the microphone. Allow microphone access and try again.",
+      );
+    }
+  };
+
+  const removeRecording = () => {
+    setAudioFile(null);
+    setAudioPreview(null);
+    setEvidenceError("");
+    setSubmitError("");
+  };
+
+  /* ---------- Upload + submit ---------- */
 
   const uploadEvidence = async (file, kind, studentId) => {
     if (!file) return null;
@@ -156,6 +390,8 @@ export default function ReportIncident() {
       file,
       {
         access: "private",
+        // Without this, Blob guesses from the extension and treats .webm as video/webm
+        contentType: file.type,
         handleUploadUrl: "/api/student/report-upload",
       },
     );
@@ -175,6 +411,10 @@ export default function ReportIncident() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSubmitting) return;
+    if (isRecording) {
+      setSubmitError("Stop the recording before submitting.");
+      return;
+    }
     if (evidenceError) {
       setSubmitError(evidenceError);
       return;
@@ -219,9 +459,7 @@ export default function ReportIncident() {
       setImagePreview(null);
       setAudioPreview(null);
       setEvidenceError("");
-      if (imageInputRef.current) imageInputRef.current.value = "";
-      if (audioInputRef.current) audioInputRef.current.value = "";
-      setIsReportsOpen(true); // show the list in a modal instead of leaving the page
+      setIsReportsOpen(true);
     } catch (error) {
       setSubmitError(error.message || "Unable to submit incident report.");
     } finally {
@@ -231,9 +469,7 @@ export default function ReportIncident() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-32">
-      {/* Main Container */}
       <main className="px-5 pt-4 max-w-md mx-auto">
-        {/* Confidentiality Notice Banner */}
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex items-start space-x-3 shadow-sm mb-6">
           <div className="w-8 h-8 bg-blue-100 rounded-xl flex items-center justify-center text-blue-600 shrink-0 mt-0.5">
             <Shield className="w-4 h-4" />
@@ -284,11 +520,10 @@ export default function ReportIncident() {
                 <option value="" disabled>
                   Select a category
                 </option>
-                <option value="safety">Safety Hazard</option>
-                <option value="maintenance">Facility Maintenance</option>
-                <option value="security">Security Concern</option>
-                <option value="medical">Medical Emergency</option>
-                <option value="other">Other Issue</option>
+                <option value="shooting">Shooting</option>
+                <option value="fire">Fire</option>
+                <option value="threat/violence">Threat/Violence</option>
+                <option value="bullying">Bullying</option>
               </select>
             </div>
           </div>
@@ -313,7 +548,6 @@ export default function ReportIncident() {
                   <option value="College of Arts & Sciences">
                     College of Arts & Sciences
                   </option>
-                  <option value="College of Nursing">College of Nursing</option>
                 </select>
               </div>
             </div>
@@ -333,10 +567,8 @@ export default function ReportIncident() {
                   <option value="Engineering Building">
                     Engineering Building
                   </option>
-                  <option value="Science Annex">Science Annex</option>
-                  <option value="Main Administration">
-                    Main Administration
-                  </option>
+                  <option value="CAS Building">CAS Building</option>
+                  <option value="GYM Grounds">GYM Grounds</option>
                 </select>
               </div>
             </div>
@@ -448,80 +680,87 @@ export default function ReportIncident() {
               <span className="text-slate-400 font-normal">Optional</span>
             </label>
             <div className="grid grid-cols-2 gap-3">
-              {/* Add Photo Box */}
+              {/* Take photo */}
               <div>
-                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
+                <button
+                  type="button"
+                  onClick={openCamera}
+                  disabled={isRecording}
+                  className="w-full border-2 border-dashed border-slate-200 hover:border-blue-400 disabled:opacity-60 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all shadow-sm"
+                >
                   <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
-                    <Upload className="w-5 h-5" />
+                    <Camera className="w-5 h-5" />
                   </div>
                   <span className="text-xs font-bold text-slate-700">
-                    Add photo
+                    {imageFile ? "Retake photo" : "Take photo"}
                   </span>
                   <span className="text-[10px] text-slate-400 mt-0.5">
-                    JPG or PNG
+                    Use the camera
                   </span>
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept={ALLOWED_IMAGE_TYPES.join(",")}
-                    className="hidden"
-                    onChange={(e) =>
-                      setEvidenceFile("image", e.target.files?.[0])
-                    }
-                  />
-                </label>
+                </button>
                 {imageFile && (
                   <div className="mt-2 space-y-2">
                     <img
                       src={imagePreview}
-                      alt="Selected report evidence"
+                      alt="Photo taken as report evidence"
                       className="h-24 w-full rounded-lg object-cover"
                     />
-                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
-                      <span className="truncate">{imageFile.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setImageFile(null);
-                          setImagePreview(null);
-                          setEvidenceError("");
-                          setSubmitError("");
-                          if (imageInputRef.current) {
-                            imageInputRef.current.value = "";
-                          }
-                        }}
-                        className="inline-flex shrink-0 items-center gap-1 font-semibold text-rose-600"
-                      >
-                        <X className="h-3 w-3" /> Remove
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={removePhoto}
+                      className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-600"
+                    >
+                      <X className="h-3 w-3" /> Remove
+                    </button>
                   </div>
                 )}
               </div>
 
-              {/* Voice Message Box */}
+              {/* Record voice */}
               <div>
-                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center cursor-pointer transition-all shadow-sm">
-                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
-                    <Mic className="w-5 h-5" />
-                  </div>
-                  <span className="text-xs font-bold text-slate-700">
-                    Voice message
-                  </span>
-                  <span className="text-[10px] text-slate-400 mt-0.5">
-                    Upload audio
-                  </span>
-                  <input
-                    ref={audioInputRef}
-                    type="file"
-                    accept={ALLOWED_AUDIO_TYPES.join(",")}
-                    className="hidden"
-                    onChange={(e) =>
-                      setEvidenceFile("audio", e.target.files?.[0])
-                    }
-                  />
-                </label>
-                {audioFile && (
+                {isRecording ? (
+                  <button
+                    type="button"
+                    onClick={stopRecording}
+                    className="w-full border-2 border-rose-300 bg-rose-50 rounded-2xl p-4 flex flex-col items-center justify-center text-center shadow-sm"
+                  >
+                    <div className="w-10 h-10 bg-rose-600 text-white rounded-xl flex items-center justify-center mb-2 animate-pulse">
+                      <Square className="w-4 h-4 fill-white" />
+                    </div>
+                    <span className="text-xs font-bold text-rose-700">
+                      Recording… tap to stop
+                    </span>
+                    <span className="text-[11px] font-mono font-semibold text-rose-600 mt-0.5">
+                      {formatClock(recordSeconds)} /{" "}
+                      {formatClock(MAX_RECORD_SECONDS)}
+                    </span>
+                    <span className="mt-2 block h-1.5 w-full overflow-hidden rounded-full bg-rose-100">
+                      <span
+                        className="block h-full rounded-full bg-rose-600 transition-all"
+                        style={{
+                          width: `${(recordSeconds / MAX_RECORD_SECONDS) * 100}%`,
+                        }}
+                      />
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={startRecording}
+                    className="w-full border-2 border-dashed border-slate-200 hover:border-blue-400 bg-white rounded-2xl p-4 flex flex-col items-center justify-center text-center transition-all shadow-sm"
+                  >
+                    <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center mb-2">
+                      <Mic className="w-5 h-5" />
+                    </div>
+                    <span className="text-xs font-bold text-slate-700">
+                      {audioFile ? "Record again" : "Record voice"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      Up to {MAX_RECORD_SECONDS} seconds
+                    </span>
+                  </button>
+                )}
+                {audioFile && !isRecording && (
                   <div className="mt-2 space-y-2">
                     <audio
                       controls
@@ -529,23 +768,13 @@ export default function ReportIncident() {
                       src={audioPreview}
                       className="w-full"
                     />
-                    <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
-                      <span className="truncate">{audioFile.name}</span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAudioFile(null);
-                          setAudioPreview(null);
-                          setEvidenceError("");
-                          setSubmitError("");
-                          if (audioInputRef.current)
-                            audioInputRef.current.value = "";
-                        }}
-                        className="inline-flex shrink-0 items-center gap-1 font-semibold text-rose-600"
-                      >
-                        <X className="h-3 w-3" /> Remove
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={removeRecording}
+                      className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-600"
+                    >
+                      <X className="h-3 w-3" /> Remove
+                    </button>
                   </div>
                 )}
               </div>
@@ -619,6 +848,42 @@ export default function ReportIncident() {
           </div>
         </form>
       </main>
+
+      {/* Camera screen: live preview with a capture button */}
+      {isCameraOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Take a photo"
+          className="fixed inset-0 z-50 flex flex-col bg-black"
+        >
+          <div className="relative flex-1 overflow-hidden">
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              autoPlay
+              className="h-full w-full object-cover"
+            />
+          </div>
+          <div className="flex items-center justify-between px-8 py-6">
+            <button
+              type="button"
+              onClick={closeCamera}
+              className="text-sm font-semibold text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={capturePhoto}
+              aria-label="Take photo"
+              className="h-16 w-16 rounded-full border-4 border-white bg-white/30 active:bg-white/60"
+            />
+            <span className="w-12" />
+          </div>
+        </div>
+      )}
 
       {/* My reports modal: mounted only while open, so it reloads the list each time */}
       {showReports && <ReportsList onClose={closeReports} />}

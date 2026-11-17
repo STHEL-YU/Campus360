@@ -27,11 +27,29 @@ const pool = new Pool({
 
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY || "";
 
+// The device clock is only trusted if it is this close to the server clock
+const MAX_CLOCK_DRIFT_MS = 10 * 60 * 1000;
+
 function isValidDeviceKey(provided) {
   if (!DEVICE_API_KEY || typeof provided !== "string") return false;
   const a = Buffer.from(provided);
   const b = Buffer.from(DEVICE_API_KEY);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+// Use the device time only when it matches the server time; otherwise use the
+// server's created_at so a wrong device clock can't show a wrong date.
+function resolveAlertTime(alertTime, createdAt) {
+  const created = new Date(createdAt);
+  const device = alertTime ? new Date(alertTime) : null;
+  if (
+    device &&
+    Number.isFinite(device.getTime()) &&
+    Math.abs(device.getTime() - created.getTime()) <= MAX_CLOCK_DRIFT_MS
+  ) {
+    return device.toISOString();
+  }
+  return created.toISOString();
 }
 
 /* ---------- Action: ingest (called by the ESP32) ---------- */
@@ -54,9 +72,14 @@ async function handleIngest(req, res) {
   const alertTime = body.alertTime ?? null;
 
   if (
-    typeof title !== "string" || !title.trim() || title.length > 200 ||
-    typeof message !== "string" || message.length > 2000 ||
-    typeof college !== "string" || !college.trim() || college.length > 100 ||
+    typeof title !== "string" ||
+    !title.trim() ||
+    title.length > 200 ||
+    typeof message !== "string" ||
+    message.length > 2000 ||
+    typeof college !== "string" ||
+    !college.trim() ||
+    college.length > 100 ||
     (alertTime !== null &&
       (typeof alertTime !== "string" ||
         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(alertTime) ||
@@ -66,10 +89,19 @@ async function handleIngest(req, res) {
   }
 
   try {
-    // No alertTime from the device (clock not synced yet) -> use server time
+    // Device time is kept only if within 10 minutes of the server time;
+    // no alertTime, or a wrong device clock -> use server time
     const result = await pool.query(
       `INSERT INTO alerts (title, message, college, alert_time)
-       VALUES ($1, $2, $3, COALESCE($4::timestamptz, now()))
+       VALUES (
+         $1, $2, $3,
+         CASE
+           WHEN $4::timestamptz BETWEEN now() - INTERVAL '10 minutes'
+                                    AND now() + INTERVAL '10 minutes'
+           THEN $4::timestamptz
+           ELSE now()
+         END
+       )
        RETURNING id`,
       [title.trim(), message.trim(), college.trim(), alertTime],
     );
@@ -122,7 +154,7 @@ async function handleLatest(req, res) {
         title: row.title,
         message: row.message,
         college: row.college,
-        alertTime: row.alert_time,
+        alertTime: resolveAlertTime(row.alert_time, row.created_at),
         createdAt: new Date(row.created_at).toISOString(),
       })),
     });
@@ -172,7 +204,7 @@ async function handleStudentLatest(req, res) {
         title: row.title,
         message: row.message,
         college: row.college,
-        alertTime: new Date(row.alert_time || row.created_at).toISOString(),
+        alertTime: resolveAlertTime(row.alert_time, row.created_at),
         createdAt: new Date(row.created_at).toISOString(),
       })),
     });

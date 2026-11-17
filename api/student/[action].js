@@ -15,6 +15,7 @@ import {
   listIncidentReportsForAdmin,
   listIncidentReportsForStudent,
   listStudentsForAdmin,
+  updateIncidentReportStatusForAdmin,
   updateStudentForAdmin,
   updateStudentProfileImage,
 } from "../campusdatabase.js";
@@ -44,6 +45,11 @@ const REPORT_AUDIO_CONTENT_TYPES = [
   "audio/wav",
   "audio/x-wav",
 ];
+const VALID_INCIDENT_REPORT_STATUSES = new Set([
+  "Pending",
+  "Resolved",
+  "Declined",
+]);
 const REPORT_EVIDENCE_PATH_PATTERN =
   /^incident-reports\/([1-9]\d*)\/(image|audio)\/[A-Za-z0-9_-]+\.(jpg|jpeg|png|webm|ogg|mp3|m4a|wav)$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -356,6 +362,7 @@ function serializeIncidentReport(report) {
     description: report.description,
     status: report.status,
     submittedAt,
+    updatedAt: new Date(report.updated_at || report.created_at).toISOString(),
     pin:
       report.pin_x === null
         ? null
@@ -626,6 +633,69 @@ async function handleAdminIncidentReports(req, res) {
   } catch (error) {
     console.error("Admin incident reports request failed", error);
     return res.status(500).json({ error: "Unable to load incident reports" });
+  }
+}
+
+async function handleAdminReportStatus(req, res) {
+  if (req.method !== "PATCH") {
+    res.setHeader("Allow", "PATCH");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  if (req.headers["x-campus360-admin"] !== "1") {
+    return res.status(403).json({ error: "Invalid admin request" });
+  }
+
+  const { id, status } = req.body || {};
+  if (
+    typeof id !== "string" ||
+    !/^[1-9]\d*$/.test(id) ||
+    typeof status !== "string" ||
+    !VALID_INCIDENT_REPORT_STATUSES.has(status)
+  ) {
+    return res.status(400).json({ error: "Invalid report status update" });
+  }
+
+  let adminId;
+  try {
+    adminId = getAdminSessionAdminId(req);
+  } catch (error) {
+    console.error("Admin session validation failed", error);
+    return res.status(500).json({ error: "Admin session is not configured" });
+  }
+  if (!adminId) {
+    return res.status(401).json({ error: "Admin sign-in is required" });
+  }
+
+  try {
+    const admin = await findActiveAdminById(adminId);
+    if (!admin) {
+      clearAdminSessionCookie(res);
+      return res.status(401).json({ error: "Admin sign-in is required" });
+    }
+    if (!isNonEmptyString(admin.college)) {
+      return res.status(403).json({ error: "Admin college is not configured" });
+    }
+
+    const report = await updateIncidentReportStatusForAdmin({
+      id,
+      college: admin.college,
+      status,
+    });
+    if (!report) {
+      return res.status(404).json({ error: "Incident report not found" });
+    }
+
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).json({
+      report: {
+        id: String(report.id),
+        status: report.status,
+        updatedAt: new Date(report.updated_at).toISOString(),
+      },
+    });
+  } catch (error) {
+    console.error("Admin incident report status update failed", error);
+    return res.status(500).json({ error: "Unable to update incident report" });
   }
 }
 
@@ -1182,6 +1252,10 @@ export default async function handler(req, res) {
 
   if (action === "admin-reports") {
     return handleAdminIncidentReports(req, res);
+  }
+
+  if (action === "admin-report-status") {
+    return handleAdminReportStatus(req, res);
   }
 
   if (action === "admin-report-evidence") {

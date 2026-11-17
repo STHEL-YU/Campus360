@@ -1,7 +1,188 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getStudentProfile } from "../../auth";
 import { Link } from "react-router-dom";
-import { AlertTriangle, ChevronRight, Clock } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Clock,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
+
+const ALARM_SECONDS = 5;
+// vibrate, pause, vibrate... (about 4.6 seconds in total)
+const VIBRATION_PATTERN = [
+  600, 200, 600, 200, 600, 200, 600, 200, 600, 200, 600,
+];
+
+// Siren: one loud square-wave tone sweeping up and down for 5 seconds
+async function playAlarmSound(context, onError) {
+  try {
+    if (context.state === "suspended") await context.resume();
+    if (context.state !== "running") return;
+
+    const start = context.currentTime;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "square";
+
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.25, start + 0.05);
+    gain.gain.setValueAtTime(0.25, start + ALARM_SECONDS - 0.2);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + ALARM_SECONDS);
+
+    oscillator.frequency.setValueAtTime(700, start);
+    for (let t = 0; t < ALARM_SECONDS; t += 0.8) {
+      oscillator.frequency.linearRampToValueAtTime(1100, start + t + 0.4);
+      oscillator.frequency.linearRampToValueAtTime(700, start + t + 0.8);
+    }
+
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + ALARM_SECONDS);
+  } catch (error) {
+    console.error("Could not play campus alert notification sound", error);
+    onError("Unable to play the alert notification sound.");
+  }
+}
+
+function vibrateDevice(pattern = VIBRATION_PATTERN) {
+  if (
+    typeof navigator === "undefined" ||
+    typeof navigator.vibrate !== "function"
+  ) {
+    return;
+  }
+  try {
+    navigator.vibrate(pattern);
+  } catch (error) {
+    console.error("Could not vibrate the device", error);
+  }
+}
+
+function isAlertFromToday(value) {
+  const date = new Date(value);
+  const today = new Date();
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  );
+}
+
+function formatAlertDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Time unavailable"
+    : date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+}
+
+// Skeleton card shown while the latest alert loads
+function AlertSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="animate-pulse rounded-2xl border border-slate-100 border-l-4 border-l-slate-200 bg-white p-4 shadow-sm"
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 h-10 w-10 shrink-0 rounded-2xl bg-slate-200" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <div className="h-4 w-2/5 rounded bg-slate-200" />
+            <div className="h-4 w-14 rounded-full bg-slate-200" />
+          </div>
+          <div className="mt-3 space-y-2">
+            <div className="h-3 w-full rounded bg-slate-200" />
+            <div className="h-3 w-4/5 rounded bg-slate-200" />
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <div className="h-3 w-1/3 rounded bg-slate-200" />
+            <div className="h-3 w-24 rounded bg-slate-200" />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Skeleton card shown while campus news loads
+function NewsSkeleton() {
+  return (
+    <div
+      aria-hidden="true"
+      className="animate-pulse overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm"
+    >
+      <div className="h-36 w-full bg-slate-200" />
+      <div className="space-y-3 p-4">
+        <div className="h-5 w-32 rounded-full bg-slate-200" />
+        <div className="h-4 w-3/4 rounded bg-slate-200" />
+        <div className="space-y-2">
+          <div className="h-3 w-full rounded bg-slate-200" />
+          <div className="h-3 w-full rounded bg-slate-200" />
+          <div className="h-3 w-2/3 rounded bg-slate-200" />
+        </div>
+        <div className="h-3 w-24 rounded bg-slate-200" />
+      </div>
+    </div>
+  );
+}
+
+// News image with a skeleton until it loads (falls back to the Campus360 banner)
+function NewsImage({ src, alt }) {
+  const [status, setStatus] = useState("loading"); // loading | loaded | error
+  const imgRef = useRef(null);
+
+  // Handles images already cached before onLoad could fire
+  useEffect(() => {
+    setStatus("loading");
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0) setStatus("loaded");
+  }, [src]);
+
+  if (status === "error") {
+    return (
+      <div className="h-24 w-full bg-gradient-to-br from-blue-100 to-slate-200 flex items-center justify-center">
+        <span className="text-sm font-bold tracking-widest text-slate-500">
+          CAMPUS360
+        </span>
+      </div>
+    );
+  }
+
+  const isLoaded = status === "loaded";
+
+  return (
+    <div className="h-36 w-full relative overflow-hidden">
+      {!isLoaded && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 animate-pulse bg-slate-200"
+        />
+      )}
+      <img
+        ref={imgRef}
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setStatus("loaded")}
+        onError={() => setStatus("error")}
+        className={`h-full w-full object-cover transition-opacity duration-300 ${
+          isLoaded ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      {isLoaded && (
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard({ onReportClick }) {
   const profile = getStudentProfile() || {};
@@ -10,6 +191,122 @@ export default function Dashboard({ onReportClick }) {
   const [todayNews, setTodayNews] = useState([]);
   const [isNewsLoading, setIsNewsLoading] = useState(true);
   const [newsError, setNewsError] = useState("");
+  const [alerts, setAlerts] = useState([]);
+  const [areAlertsLoading, setAreAlertsLoading] = useState(true);
+  const [alertsError, setAlertsError] = useState("");
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [soundError, setSoundError] = useState("");
+  const [newAlertIds, setNewAlertIds] = useState([]);
+  const audioContextRef = useRef(null);
+  const seenAlertIdsRef = useRef(null);
+  const soundEnabledRef = useRef(false);
+  const newAlertTimeoutRef = useRef(null);
+
+  const toggleAlertSound = async () => {
+    if (soundEnabledRef.current) {
+      soundEnabledRef.current = false;
+      setSoundEnabled(false);
+      return;
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) {
+      setSoundError("This browser does not support notification sounds.");
+      return;
+    }
+
+    try {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContextConstructor();
+      }
+      await audioContextRef.current.resume();
+      soundEnabledRef.current = true;
+      setSoundEnabled(true);
+      setSoundError("");
+      vibrateDevice(200); // short buzz to confirm it is on
+    } catch (error) {
+      console.error("Could not enable campus alert sounds", error);
+      setSoundError("Unable to enable notification sounds in this browser.");
+    }
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let requestInFlight = false;
+
+    async function loadAlerts() {
+      if (requestInFlight) return;
+      requestInFlight = true;
+      try {
+        const response = await fetch("/api/alerts/student-latest", {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Unable to load campus alerts.");
+        }
+        if (!Array.isArray(result.alerts)) {
+          throw new Error("The server returned an invalid alert list.");
+        }
+
+        const previousIds = seenAlertIdsRef.current;
+        const currentIds = new Set(result.alerts.map((alert) => alert.id));
+        if (previousIds) {
+          const newlyReceived = result.alerts.filter(
+            (alert) =>
+              !previousIds.has(alert.id) && isAlertFromToday(alert.createdAt),
+          );
+          if (newlyReceived.length > 0) {
+            setNewAlertIds(newlyReceived.map((alert) => alert.id));
+            if (newAlertTimeoutRef.current) {
+              window.clearTimeout(newAlertTimeoutRef.current);
+            }
+            newAlertTimeoutRef.current = window.setTimeout(
+              () => setNewAlertIds([]),
+              10000,
+            );
+
+            vibrateDevice();
+            if (soundEnabledRef.current && audioContextRef.current) {
+              void playAlarmSound(audioContextRef.current, setSoundError);
+            }
+          }
+        }
+        seenAlertIdsRef.current = currentIds;
+
+        // Keep only the single newest alert from today
+        const latestToday = result.alerts
+          .filter((alert) => isAlertFromToday(alert.createdAt))
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, 1);
+        setAlerts(latestToday);
+        setAlertsError("");
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setAlertsError(error.message || "Unable to load campus alerts.");
+        }
+      } finally {
+        requestInFlight = false;
+        if (!controller.signal.aborted) setAreAlertsLoading(false);
+      }
+    }
+
+    loadAlerts();
+    const refreshTimer = window.setInterval(loadAlerts, 15000);
+    window.addEventListener("focus", loadAlerts);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadAlerts);
+      window.clearTimeout(newAlertTimeoutRef.current);
+      controller.abort();
+      if (audioContextRef.current?.state !== "closed") {
+        void audioContextRef.current?.close();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -123,48 +420,133 @@ export default function Dashboard({ onReportClick }) {
           </div>
         </button>
 
-        {/* LIVE UPDATES: Recent Safety Alerts */}
+        {/* LIVE UPDATES: Latest Safety Alert */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold tracking-wider text-blue-600 uppercase">
-              Live Updates
-            </span>
-            <button className="text-xs font-semibold text-blue-600 hover:underline">
-              View all
-            </button>
-          </div>
-
-          <h3 className="text-sm font-bold text-slate-800">
-            Recent safety alerts
-          </h3>
-
-          {/* Yellow Alert Card */}
-          <div className="bg-white rounded-2xl p-4 border-l-4 border-amber-400 border border-slate-100 shadow-sm relative overflow-hidden">
-            <div className="flex items-start space-x-3">
-              <div className="w-10 h-10 bg-amber-50 rounded-2xl flex items-center justify-center shrink-0 text-amber-500 mt-0.5">
-                <AlertTriangle className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center space-x-2">
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping mr-1.5" />
-                    Active - Yellow alert
-                  </span>
-                </div>
-                <h4 className="text-sm font-bold text-slate-900 mt-1.5">
-                  College Safety Alert
-                </h4>
-                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                  Engineering Building B - Use the east entrance until further
-                  notice.
-                </p>
-                <div className="flex items-center text-[11px] text-slate-400 mt-3 space-x-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>12 minutes ago</span>
-                </div>
-              </div>
+            <div>
+              <span className="text-xs font-bold tracking-wider text-blue-600 uppercase">
+                Live Updates
+              </span>
+              <h3 className="mt-1 text-sm font-bold text-slate-800">
+                Latest alert
+              </h3>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={toggleAlertSound}
+                aria-pressed={soundEnabled}
+                aria-label={
+                  soundEnabled
+                    ? "Disable alarm sound for new alerts"
+                    : "Enable alarm sound for new alerts"
+                }
+                className={`flex items-center gap-1 text-xs font-semibold ${
+                  soundEnabled
+                    ? "text-emerald-700"
+                    : "text-slate-500 hover:text-blue-600"
+                }`}
+              >
+                {soundEnabled ? (
+                  <Volume2 className="h-4 w-4" />
+                ) : (
+                  <VolumeX className="h-4 w-4" />
+                )}
+                {soundEnabled ? "Alarm on" : "Enable alarm"}
+              </button>
+              <Link
+                to="/student/alerts"
+                className="text-xs font-semibold text-blue-600 hover:underline"
+              >
+                View all
+              </Link>
             </div>
           </div>
+
+          {soundError && (
+            <p role="status" className="text-[11px] text-rose-600">
+              {soundError}
+            </p>
+          )}
+          {alertsError && (
+            <p
+              role="alert"
+              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-700"
+            >
+              {alertsError}
+            </p>
+          )}
+          {areAlertsLoading ? (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-label="Loading latest safety alert"
+            >
+              <AlertSkeleton />
+            </div>
+          ) : alerts.length > 0 ? (
+            <div className="space-y-3" aria-live="assertive">
+              {alerts.map((alert) => {
+                const isNew = newAlertIds.includes(alert.id);
+                return (
+                  <article
+                    key={alert.id}
+                    className={`relative overflow-hidden rounded-2xl border border-slate-100 border-l-4 p-4 shadow-sm ${
+                      isNew
+                        ? "border-l-rose-600 bg-rose-50 ring-1 ring-rose-200"
+                        : "border-l-amber-400 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${
+                          isNew
+                            ? "animate-pulse bg-rose-100 text-rose-600"
+                            : "bg-amber-50 text-amber-600"
+                        }`}
+                      >
+                        <AlertTriangle className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h4 className="text-sm font-bold text-slate-900">
+                            {alert.title}
+                          </h4>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              isNew
+                                ? "bg-rose-100 text-rose-700"
+                                : "bg-amber-50 text-amber-700"
+                            }`}
+                          >
+                            {isNew ? "Just now" : "Today"}
+                          </span>
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+                          {alert.message}
+                        </p>
+                        <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-400">
+                          <span>{alert.college}</span>
+                          <span className="flex shrink-0 items-center gap-1">
+                            <Clock className="h-3.5 w-3.5" />
+                            {formatAlertDate(
+                              alert.alertTime || alert.createdAt,
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            !alertsError && (
+              <p className="rounded-2xl bg-white px-4 py-8 text-center text-xs text-slate-400 shadow-sm">
+                No new alerts today for your college.
+              </p>
+            )
+          )}
         </section>
 
         {/* Campus Updates / News Section */}
@@ -190,10 +572,14 @@ export default function Dashboard({ onReportClick }) {
 
           {isNewsLoading ? (
             <div
-              className="h-56 animate-pulse rounded-2xl bg-slate-200"
               role="status"
+              aria-live="polite"
               aria-label="Loading today's campus news"
-            />
+              className="space-y-3"
+            >
+              <NewsSkeleton />
+              <NewsSkeleton />
+            </div>
           ) : todayNews.length > 0 ? (
             todayNews.map((item) => (
               <article
@@ -201,15 +587,7 @@ export default function Dashboard({ onReportClick }) {
                 className="bg-white rounded-2xl overflow-hidden border border-slate-100 shadow-sm"
               >
                 {item.imageUrl ? (
-                  <div className="h-36 w-full relative">
-                    <img
-                      src={item.imageUrl}
-                      alt={item.title}
-                      loading="lazy"
-                      className="h-full w-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-900/60 via-transparent to-transparent" />
-                  </div>
+                  <NewsImage src={item.imageUrl} alt={item.title} />
                 ) : (
                   <div className="h-24 w-full bg-gradient-to-br from-blue-100 to-slate-200 flex items-center justify-center">
                     <span className="text-sm font-bold tracking-widest text-slate-500">
@@ -227,9 +605,7 @@ export default function Dashboard({ onReportClick }) {
                   <p className="text-xs text-slate-600 leading-relaxed line-clamp-3">
                     {item.content || "No message content."}
                   </p>
-                  <p className="text-[11px] text-slate-400">
-                    {item.published}
-                  </p>
+                  <p className="text-[11px] text-slate-400">{item.published}</p>
                 </div>
               </article>
             ))

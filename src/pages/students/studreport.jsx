@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import {
-  Shield,
-  Upload,
-  Mic,
-  MapPin,
-  LoaderCircle,
-  X,
-} from "lucide-react";
+import { Shield, Upload, Mic, MapPin, LoaderCircle, X } from "lucide-react";
 import { getStudentProfile } from "../../auth";
+import { useLocation, useNavigate } from "react-router-dom";
+import ReportsList from "./studreportlist.jsx"; // adjust the path if the file is elsewhere
 
 // Set to false to use your real map at /campus-map.png
 const USE_DUMMY_MAP = true;
@@ -64,18 +58,28 @@ const AUDIO_EXTENSIONS = {
 };
 
 export default function ReportIncident() {
+  const location = useLocation();
   const navigate = useNavigate();
   const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
   const [imageFile, setImageFile] = useState(null);
   const [audioFile, setAudioFile] = useState(null);
   const [mapError, setMapError] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isReportsOpen, setIsReportsOpen] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
   const imageInputRef = useRef(null);
   const audioInputRef = useRef(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [audioPreview, setAudioPreview] = useState(null);
+  const showReports =
+    isReportsOpen || Boolean(location.state?.openReports);
+  const closeReports = () => {
+    setIsReportsOpen(false);
+    if (location.state?.openReports) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  };
 
   useEffect(
     () => () => {
@@ -143,7 +147,8 @@ export default function ReportIncident() {
           ? "png"
           : "jpg"
         : AUDIO_EXTENSIONS[file.type];
-    if (!extension) throw new Error("This evidence file format is not supported.");
+    if (!extension)
+      throw new Error("This evidence file format is not supported.");
 
     const { upload } = await import("@vercel/blob/client");
     const blob = await upload(
@@ -183,7 +188,9 @@ export default function ReportIncident() {
       if (imageFile || audioFile) {
         const student = getStudentProfile();
         if (!student?.id) {
-          throw new Error("Please sign in again before uploading report evidence.");
+          throw new Error(
+            "Please sign in again before uploading report evidence.",
+          );
         }
         [imagePath, audioPath] = await Promise.all([
           uploadEvidence(imageFile, "image", student.id),
@@ -214,7 +221,7 @@ export default function ReportIncident() {
       setEvidenceError("");
       if (imageInputRef.current) imageInputRef.current.value = "";
       if (audioInputRef.current) audioInputRef.current.value = "";
-      navigate("/student/alerts", { replace: true });
+      setIsReportsOpen(true); // show the list in a modal instead of leaving the page
     } catch (error) {
       setSubmitError(error.message || "Unable to submit incident report.");
     } finally {
@@ -241,13 +248,14 @@ export default function ReportIncident() {
           </div>
         </div>
 
-        <Link
-          to="/student/alerts"
+        <button
+          type="button"
+          onClick={() => setIsReportsOpen(true)}
           className="mb-5 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-700 shadow-sm hover:border-blue-300 hover:text-blue-700"
         >
           <span>Track my submitted reports</span>
           <span className="text-blue-600">My reports →</span>
-        </Link>
+        </button>
 
         <form onSubmit={handleSubmit} className="space-y-5">
           {submitError && (
@@ -508,7 +516,9 @@ export default function ReportIncident() {
                     type="file"
                     accept={ALLOWED_AUDIO_TYPES.join(",")}
                     className="hidden"
-                    onChange={(e) => setEvidenceFile("audio", e.target.files?.[0])}
+                    onChange={(e) =>
+                      setEvidenceFile("audio", e.target.files?.[0])
+                    }
                   />
                 </label>
                 {audioFile && (
@@ -528,7 +538,8 @@ export default function ReportIncident() {
                           setAudioPreview(null);
                           setEvidenceError("");
                           setSubmitError("");
-                          if (audioInputRef.current) audioInputRef.current.value = "";
+                          if (audioInputRef.current)
+                            audioInputRef.current.value = "";
                         }}
                         className="inline-flex shrink-0 items-center gap-1 font-semibold text-rose-600"
                       >
@@ -608,6 +619,9 @@ export default function ReportIncident() {
           </div>
         </form>
       </main>
+
+      {/* My reports modal: mounted only while open, so it reloads the list each time */}
+      {showReports && <ReportsList onClose={closeReports} />}
     </div>
   );
 }

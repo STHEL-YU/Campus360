@@ -133,7 +133,8 @@ async function ensureIncidentReportsTable() {
       await query(`
         ALTER TABLE public.incident_reports
           ADD COLUMN IF NOT EXISTS image_path TEXT,
-          ADD COLUMN IF NOT EXISTS audio_path TEXT
+          ADD COLUMN IF NOT EXISTS audio_path TEXT,
+          ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       `);
       await query(`
         CREATE INDEX IF NOT EXISTS incident_reports_student_created_idx
@@ -343,7 +344,8 @@ export async function listIncidentReportsForStudent(studentId) {
 
   const result = await query(
     `SELECT id, category, college, building, location, description, status,
-            created_at, pin_x, pin_y, image_path, audio_path, is_anonymous
+            created_at, updated_at, pin_x, pin_y, image_path, audio_path,
+            is_anonymous
      FROM public.incident_reports
      WHERE student_id = $1
      ORDER BY created_at DESC, id DESC`,
@@ -351,6 +353,28 @@ export async function listIncidentReportsForStudent(studentId) {
   );
 
   return result.rows;
+}
+
+export async function updateIncidentReportStatusForAdmin({
+  id,
+  college,
+  status,
+}) {
+  await ensureIncidentReportsTable();
+
+  const result = await query(
+    `UPDATE public.incident_reports
+     SET status = $3, updated_at = NOW()
+     WHERE id = $1
+       AND (
+         college = $2
+         OR ($2 = 'College of Nursing and Health Sciences' AND college = 'College of Nursing')
+       )
+     RETURNING id, status, updated_at`,
+    [id, college, status],
+  );
+
+  return result.rows[0] || null;
 }
 
 export async function listIncidentReportsForAdmin(college) {

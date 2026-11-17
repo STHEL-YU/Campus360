@@ -20,7 +20,7 @@ import AdminLogin from "./pages/admins/auth/login.jsx";
 // Student Pages & Auth
 import StudentDashboard from "./pages/students/studdashboard.jsx";
 import StudentReport from "./pages/students/studreport.jsx";
-import StudentAlerts from "./pages/students/studlistreport.jsx";
+import StudentAlerts from "./pages/students/studlistalert.jsx";
 import StudentNews from "./pages/students/studnews.jsx";
 import StudentProfile from "./pages/students/studprofile.jsx";
 import StudentLogin from "./pages/students/auth/studlogin.jsx";
@@ -38,6 +38,29 @@ import { isAuthed, signIn, signOut } from "./auth";
 // ==========================================
 // STUDENT LAYOUT
 // ==========================================
+function isToday(value) {
+  const date = new Date(value);
+  const today = new Date();
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  );
+}
+
+function formatNotificationTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Time unavailable"
+    : date.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      });
+}
+
 function StudentLayout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -54,35 +77,119 @@ function StudentLayout() {
       if (requestInFlight) return;
       requestInFlight = true;
       try {
-        const response = await fetch("/api/news/feed", {
-          credentials: "same-origin",
-          signal: controller.signal,
-        });
-        const result = await response.json();
-
-        if (!response.ok) {
-          throw new Error(result.error || "Unable to load notifications.");
-        }
-        if (!Array.isArray(result.announcements)) {
-          throw new Error("The server returned an invalid news feed.");
+        async function loadFeed(url, field, errorMessage) {
+          const response = await fetch(url, {
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || errorMessage);
+          }
+          if (!Array.isArray(result[field])) {
+            throw new Error(errorMessage);
+          }
+          return result[field];
         }
 
         const today = new Date().toISOString().slice(0, 10);
-        const newAnnouncements = result.announcements.filter(
+        const [announcementFeed, alertFeed, reportFeed] =
+          await Promise.allSettled([
+            loadFeed(
+              "/api/news/feed",
+              "announcements",
+              "Unable to load announcements.",
+            ),
+            loadFeed(
+              "/api/alerts/student-latest",
+              "alerts",
+              "Unable to load campus alerts.",
+            ),
+            loadFeed(
+              "/api/student/report",
+              "reports",
+              "Unable to load your reports.",
+            ),
+          ]);
+        if (controller.signal.aborted) return;
+
+        const feeds = [
+          { kind: "announcement", result: announcementFeed },
+          { kind: "alert", result: alertFeed },
+          { kind: "report", result: reportFeed },
+        ];
+        const failedFeeds = feeds.filter(
+          ({ result }) => result.status === "rejected",
+        );
+        const failedKinds = new Set(failedFeeds.map(({ kind }) => kind));
+        const errors = failedFeeds.map(
+          ({ result }) =>
+            result.reason.message || "Unable to load notifications.",
+        );
+        const announcements =
+          announcementFeed.status === "fulfilled"
+            ? announcementFeed.value
+            : [];
+        const alerts = alertFeed.status === "fulfilled" ? alertFeed.value : [];
+        const reports =
+          reportFeed.status === "fulfilled" ? reportFeed.value : [];
+        const newAnnouncements = announcements.filter(
           (announcement) => announcement.publishedAt === today,
         );
-        if (!controller.signal.aborted) {
-          setNotificationItems(
-            newAnnouncements.map((announcement) => ({
-              id: announcement.id,
-              title: announcement.title,
-              type: announcement.type,
-              published: announcement.published,
-              imageUrl: announcement.imageUrl,
+        const items = [
+          ...newAnnouncements.map((announcement) => ({
+            key: `announcement-${announcement.id}`,
+            kind: "announcement",
+            id: announcement.id,
+            title: announcement.title,
+            type: announcement.type,
+            published: announcement.published,
+            imageUrl: announcement.imageUrl,
+            sortAt: announcement.publishedAt,
+          })),
+          ...alerts
+            .filter((alert) => isToday(alert.createdAt))
+            .map((alert) => ({
+              key: `alert-${alert.id}`,
+              kind: "alert",
+              id: alert.id,
+              title: alert.title,
+              type: "New campus alert",
+              message: alert.message,
+              published: formatNotificationTime(
+                alert.alertTime || alert.createdAt,
+              ),
+              sortAt: alert.createdAt,
             })),
+          ...reports
+            .filter(
+              (report) =>
+                report.status?.toLowerCase() === "resolved" &&
+                isToday(report.updatedAt),
+            )
+            .map((report) => ({
+              key: `report-${report.id}`,
+              kind: "report",
+              id: report.id,
+              title: `${report.reportNumber} resolved`,
+              type: report.category || "Incident report",
+              message: "Your incident report has been resolved.",
+              published: formatNotificationTime(report.updatedAt),
+              sortAt: report.updatedAt,
+            })),
+        ];
+
+        setNotificationItems((previousItems) => {
+          const retainedItems = previousItems.filter((item) =>
+            failedKinds.has(item.kind),
           );
-          setNotificationError("");
-        }
+          return [...items, ...retainedItems].sort(
+            (first, second) =>
+              new Date(second.sortAt).getTime() -
+              new Date(first.sortAt).getTime(),
+          );
+        });
+        setNotificationError(errors.join(" "));
       } catch (error) {
         if (error.name !== "AbortError") {
           console.error("Student notification count failed:", error);
@@ -136,11 +243,19 @@ function StudentLayout() {
           onBack={() => navigate(-1)}
           notificationItems={notificationItems}
           notificationError={notificationError}
-          onNotificationSelect={(announcement) =>
-            navigate("/student/news", {
-              state: { announcementId: announcement.id },
-            })
-          }
+          onNotificationSelect={(item) => {
+            if (item.kind === "alert") {
+              navigate("/student/alerts", { state: { alertId: item.id } });
+            } else if (item.kind === "report") {
+              navigate("/student/report", {
+                state: { openReports: true, reportId: item.id },
+              });
+            } else {
+              navigate("/student/news", {
+                state: { announcementId: item.id },
+              });
+            }
+          }}
         />
 
         <div className="flex-1 overflow-y-auto pb-28">

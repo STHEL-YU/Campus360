@@ -74,6 +74,7 @@ export default function CampusMonitoring() {
   const [reports, setReports] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
 
   const [statusFilter, setStatusFilter] = useState(null);
@@ -165,18 +166,44 @@ export default function CampusMonitoring() {
   const confirmReport = reports.find((r) => r.id === confirm?.id) || null;
 
   // Actions
-  const setStatus = (id, status) => {
-    setReports((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
+  const setStatus = async (id, status) => {
+    setActionError("");
+    try {
+      const response = await fetch("/api/student/admin-report-status", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Campus360-Admin": "1",
+        },
+        body: JSON.stringify({ id, status }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to update report status.");
+      }
+
+      setReports((previous) =>
+        previous.map((report) =>
+          report.id === id ? { ...report, status: result.report.status } : report,
+        ),
+      );
+      return true;
+    } catch (error) {
+      setActionError(error.message || "Unable to update report status.");
+      return false;
+    }
   };
 
-  const handleAccept = (id) => setStatus(id, "Pending");
-  const handleResolve = (id) => setStatus(id, "Resolved");
+  const handleAccept = (id) => void setStatus(id, "Pending");
+  const handleResolve = (id) => void setStatus(id, "Resolved");
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!confirm) return;
 
     if (confirm.type === "decline") {
-      setStatus(confirm.id, "Declined");
+      const updated = await setStatus(confirm.id, "Declined");
+      if (!updated) return;
     } else if (confirm.type === "delete") {
       setReports((prev) => prev.filter((r) => r.id !== confirm.id));
       if (selectedId === confirm.id) setSelectedId(null);
@@ -284,6 +311,14 @@ export default function CampusMonitoring() {
 
   return (
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none font-sans">
+      {actionError && (
+        <p
+          role="alert"
+          className="fixed bottom-4 right-4 z-[80] max-w-sm rounded-lg bg-rose-50 px-4 py-3 text-xs text-rose-700 shadow-lg"
+        >
+          {actionError}
+        </p>
+      )}
       {/* Page Content Body */}
       <div className="p-8 flex flex-col gap-6 max-w-[1600px] w-full mx-auto">
         {/* Title Header */}

@@ -2,11 +2,18 @@ import process from "node:process";
 import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 import pg from "pg";
-import { findActiveAdminById } from "../campusdatabase.js";
+import {
+  findActiveAdminById,
+  findStudentProfileById,
+} from "../campusdatabase.js";
 import {
   clearAdminSessionCookie,
   getAdminSessionAdminId,
 } from "../admin-session.js";
+import {
+  clearStudentSessionCookie,
+  getStudentSessionId,
+} from "../student-session.js";
 
 const { Pool } = pg;
 
@@ -125,11 +132,62 @@ async function handleLatest(req, res) {
   }
 }
 
+async function handleStudentLatest(req, res) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  let studentId;
+  try {
+    studentId = getStudentSessionId(req);
+  } catch (error) {
+    console.error("Student session validation failed", error);
+    return res.status(500).json({ error: "Student session is not configured" });
+  }
+  if (!studentId) {
+    return res.status(401).json({ error: "Student sign-in is required" });
+  }
+
+  try {
+    const student = await findStudentProfileById(studentId);
+    if (!student || student.status.toLowerCase() !== "active") {
+      clearStudentSessionCookie(res);
+      return res.status(401).json({ error: "Student sign-in is required" });
+    }
+
+    const result = await pool.query(
+      `SELECT id, title, message, college, alert_time, created_at
+       FROM alerts
+       WHERE college = $1
+         AND created_at >= NOW() - INTERVAL '7 days'
+       ORDER BY created_at DESC, id DESC`,
+      [student.college],
+    );
+
+    res.setHeader("Cache-Control", "private, no-store");
+    return res.status(200).json({
+      alerts: result.rows.map((row) => ({
+        id: String(row.id),
+        title: row.title,
+        message: row.message,
+        college: row.college,
+        alertTime: new Date(row.alert_time || row.created_at).toISOString(),
+        createdAt: new Date(row.created_at).toISOString(),
+      })),
+    });
+  } catch (error) {
+    console.error("Student alert query failed", error);
+    return res.status(500).json({ error: "Unable to load campus alerts" });
+  }
+}
+
 /* ---------- Router ---------- */
 
 const ACTION_HANDLERS = {
   ingest: handleIngest,
   latest: handleLatest,
+  "student-latest": handleStudentLatest,
 };
 
 export default async function handler(req, res) {

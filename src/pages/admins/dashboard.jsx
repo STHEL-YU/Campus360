@@ -118,6 +118,39 @@ const AD_STYLES = [
   "from-blue-700 to-indigo-500",
 ];
 
+// Hardware alert cards: color only, no image
+const ALERT_STYLES = {
+  red: {
+    label: "Red alert",
+    card: "from-red-600 to-rose-500 text-white",
+    iconWrap: "bg-white/20",
+    chip: "bg-white/20",
+    sub: "text-white/80",
+  },
+  yellow: {
+    label: "Yellow alert",
+    card: "from-amber-400 to-yellow-400 text-slate-900",
+    iconWrap: "bg-black/10",
+    chip: "bg-black/10",
+    sub: "text-slate-800/80",
+  },
+};
+
+// The alerts table has no level column, so the title decides it:
+// the red buttons send "General Announcement", the yellow ones a college title.
+const getAlertLevel = (alert) =>
+  /general/i.test(alert.title || "") ? "red" : "yellow";
+
+const isSameDay = (ms, reference) => {
+  const a = new Date(ms);
+  return (
+    !Number.isNaN(a.getTime()) &&
+    a.getFullYear() === reference.getFullYear() &&
+    a.getMonth() === reference.getMonth() &&
+    a.getDate() === reference.getDate()
+  );
+};
+
 const MONTHS = [
   "January",
   "February",
@@ -144,7 +177,23 @@ const buildMonthCells = (year, month) => {
 
 async function requestDashboardData(signal) {
   const headers = { "X-Campus360-Admin": "1" };
-  const [usersResponse, announcementsResponse, reportsResponse] =
+
+  // Alerts are optional: if this request fails the rest of the dashboard still loads
+  const alertsRequest = fetch("/api/alerts/latest?limit=100", {
+    credentials: "same-origin",
+    headers,
+    signal,
+  })
+    .then(async (response) => {
+      const body = await response.json();
+      return response.ok && Array.isArray(body.alerts) ? body.alerts : [];
+    })
+    .catch((error) => {
+      if (error.name === "AbortError") throw error;
+      return [];
+    });
+
+  const [usersResponse, announcementsResponse, reportsResponse, alerts] =
     await Promise.all([
     fetch("/api/student/admin-students", {
       credentials: "same-origin",
@@ -161,6 +210,7 @@ async function requestDashboardData(signal) {
         headers,
         signal,
       }),
+      alertsRequest,
     ]);
   const [usersResult, announcementsResult, reportsResult] = await Promise.all([
     usersResponse.json(),
@@ -191,6 +241,7 @@ async function requestDashboardData(signal) {
     users: usersResult.users,
     announcements: announcementsResult.announcements,
     reports: reportsResult.reports,
+    alerts,
   };
 }
 
@@ -235,6 +286,26 @@ function mapDashboardIncident(report) {
   };
 }
 
+function mapDashboardAlert(alert) {
+  const created = new Date(alert.createdAt);
+  const shown = new Date(alert.alertTime || alert.createdAt);
+  return {
+    id: `alert-${alert.id}`,
+    kind: "alert",
+    title: alert.title,
+    message: alert.message,
+    college: alert.college,
+    level: getAlertLevel(alert),
+    createdAt: created.getTime(),
+    time: Number.isNaN(shown.getTime())
+      ? "Time unavailable"
+      : shown.toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+  };
+}
+
 
 const useNow = () => {
   const [now, setNow] = useState(() => new Date());
@@ -244,6 +315,111 @@ const useNow = () => {
   }, []);
   return now;
 };
+
+// Small pulsing block used to build the skeletons
+function Skel({ className = "" }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`block animate-pulse rounded bg-slate-200 ${className}`}
+    />
+  );
+}
+
+// Skeleton rows for the incident table (7 columns, 5 rows)
+function IncidentRowsSkeleton() {
+  return Array.from({ length: 5 }, (_, index) => (
+    <tr key={`incident-skeleton-${index}`} aria-hidden="true">
+      <td className="py-3.5 pr-3">
+        <Skel className="h-3.5 w-24" />
+      </td>
+      <td className="py-3.5 pr-3">
+        <Skel className="h-3.5 w-20" />
+      </td>
+      <td className="py-3.5 pr-3">
+        <Skel className="h-3.5 w-24" />
+      </td>
+      <td className="py-3.5 pr-3">
+        <Skel className="h-3.5 w-28" />
+      </td>
+      <td className="py-3.5 pr-3">
+        <Skel className="h-3.5 w-12" />
+      </td>
+      <td className="py-3.5 pr-3">
+        <Skel className="h-5 w-14 rounded-full" />
+      </td>
+      <td className="py-3.5 text-right">
+        <Skel className="ml-auto h-6 w-12 rounded-lg" />
+      </td>
+    </tr>
+  ));
+}
+
+// Skeleton shaped like one announcement card
+function AnnouncementSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading announcements"
+      className="min-h-[180px] animate-pulse rounded-2xl bg-slate-200 p-5 flex flex-col justify-between"
+    >
+      <div className="flex items-center justify-between">
+        <div className="h-9 w-9 rounded-xl bg-slate-300" />
+        <div className="h-5 w-16 rounded-full bg-slate-300" />
+      </div>
+      <div className="flex flex-col gap-2">
+        <div className="h-4 w-4/5 rounded bg-slate-300" />
+        <div className="h-3 w-2/5 rounded bg-slate-300" />
+      </div>
+    </div>
+  );
+}
+
+// Announcement background image: soft pulse until it loads, hidden if it fails
+function AnnouncementImage({ src }) {
+  const [status, setStatus] = useState("loading"); // loading | loaded | error
+  const imgRef = useRef(null);
+
+  // Handles images already cached before onLoad could fire
+  useEffect(() => {
+    setStatus("loading");
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0) setStatus("loaded");
+  }, [src]);
+
+  if (status === "error") return null;
+
+  const isLoaded = status === "loaded";
+
+  return (
+    <>
+      <img
+        ref={imgRef}
+        src={src}
+        alt=""
+        aria-hidden="true"
+        loading="lazy"
+        onLoad={() => setStatus("loaded")}
+        onError={() => setStatus("error")}
+        className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-300 ${
+          isLoaded ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      {!isLoaded && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 animate-pulse bg-white/25"
+        />
+      )}
+      {isLoaded && (
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/35 to-slate-900/20"
+        />
+      )}
+    </>
+  );
+}
 
 
 export default function Dashboard({ onNavigate }) {
@@ -262,6 +438,7 @@ export default function Dashboard({ onNavigate }) {
   const [incidents, setIncidents] = useState([]);
  
   const [announcements, setAnnouncements] = useState([]);
+  const [alerts, setAlerts] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [hasLoadedDashboardData, setHasLoadedDashboardData] = useState(false);
@@ -304,9 +481,15 @@ export default function Dashboard({ onNavigate }) {
               audience: announcement.audience,
               time: announcement.published,
               imageUrl: announcement.imageUrl,
+              createdAt:
+                new Date(
+                  announcement.publishedAtTime || announcement.publishedAt,
+                ).getTime() || 0,
+              sortId: Number(announcement.id) || 0,
               isNew: false,
             })),
         );
+        setAlerts(result.alerts.map(mapDashboardAlert));
         setHasLoadedDashboardData(true);
         setDashboardDataError("");
       } catch (error) {
@@ -335,6 +518,26 @@ export default function Dashboard({ onNavigate }) {
   const pendingAccounts = accounts.filter(
     (account) => account.status === "Pending",
   );
+
+  // Alerts created today, newest first
+  const todayAlerts = alerts
+    .filter((alert) => isSameDay(alert.createdAt, now))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const redAlertCount = todayAlerts.filter((a) => a.level === "red").length;
+  const yellowAlertCount = todayAlerts.length - redAlertCount;
+
+  // Panel list: alerts and announcements together, newest first
+  const feedItems = [
+    ...todayAlerts.slice(0, 5).map((alert) => ({
+      ...alert,
+      sortId: 0,
+      isNew: now.getTime() - alert.createdAt < 10 * 60 * 1000,
+    })),
+    ...announcements.map((announcement) => ({
+      ...announcement,
+      kind: "announcement",
+    })),
+  ].sort((a, b) => b.createdAt - a.createdAt || b.sortId - a.sortId);
 
   const collegeReports = [
     { name: "Engineering", count: 64, width: "90%" },
@@ -452,6 +655,8 @@ export default function Dashboard({ onNavigate }) {
       title: pick.title,
       audience: pick.audience,
       time: nowTime(),
+      createdAt: Date.now(),
+      sortId: 0,
       isNew: true,
     };
 
@@ -518,23 +723,30 @@ export default function Dashboard({ onNavigate }) {
     year: "numeric",
   });
   const registeredUserCount = isDashboardLoading ? (
-    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+    <Skel className="h-7 w-16" />
   ) : hasLoadedDashboardData ? (
     accounts.length.toLocaleString()
   ) : (
     "—"
   );
   const pendingApprovalCount = isDashboardLoading ? (
-    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+    <Skel className="h-7 w-16" />
   ) : hasLoadedDashboardData ? (
     pendingAccounts.length.toLocaleString()
   ) : (
     "—"
   );
   const incidentCount = isDashboardLoading ? (
-    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+    <Skel className="h-7 w-16" />
   ) : hasLoadedDashboardData ? (
     incidents.length.toLocaleString()
+  ) : (
+    "—"
+  );
+  const newAlertCount = isDashboardLoading ? (
+    <Skel className="h-7 w-16" />
+  ) : hasLoadedDashboardData ? (
+    todayAlerts.length.toLocaleString()
   ) : (
     "—"
   );
@@ -722,24 +934,32 @@ export default function Dashboard({ onNavigate }) {
                     {incidentCount}
                   </div>
                   <div className="text-[11px] text-purple-600 font-medium mt-1">
-                    {isDashboardLoading
-                      ? "Loading reports..."
-                      : `${incidentsThisWeek} this week`}
+                    {isDashboardLoading ? (
+                      <Skel className="h-3 w-20 bg-purple-100" />
+                    ) : (
+                      `${incidentsThisWeek} this week`
+                    )}
                   </div>
                 </div>
               </div>
 
               <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col justify-between">
                 <div className="flex items-center justify-between text-slate-500 mb-3">
-                  <span className="text-xs font-medium">Active alerts</span>
+                  <span className="text-xs font-medium">New alerts</span>
                   <div className="p-2 bg-rose-50 text-rose-600 rounded-xl">
                     <AlertCircle className="w-4 h-4" />
                   </div>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-slate-900">2</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {newAlertCount}
+                  </div>
                   <div className="text-[11px] text-rose-600 font-medium mt-1">
-                    1 yellow • 1 advisory
+                    {isDashboardLoading ? (
+                      <Skel className="h-3 w-24 bg-rose-100" />
+                    ) : (
+                      `${redAlertCount} red • ${yellowAlertCount} yellow today`
+                    )}
                   </div>
                 </div>
               </div>
@@ -755,14 +975,20 @@ export default function Dashboard({ onNavigate }) {
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {isDashboardLoading
-                      ? "—"
-                      : hasLoadedDashboardData
-                        ? resolvedIncidentCount.toLocaleString()
-                        : "—"}
+                    {isDashboardLoading ? (
+                      <Skel className="h-7 w-16" />
+                    ) : hasLoadedDashboardData ? (
+                      resolvedIncidentCount.toLocaleString()
+                    ) : (
+                      "—"
+                    )}
                   </div>
                   <div className="text-[11px] text-slate-400 font-medium mt-1">
-                    {resolutionRate}% resolution rate
+                    {isDashboardLoading ? (
+                      <Skel className="h-3 w-24" />
+                    ) : (
+                      `${resolutionRate}% resolution rate`
+                    )}
                   </div>
                 </div>
               </div>
@@ -823,16 +1049,12 @@ export default function Dashboard({ onNavigate }) {
                         <th className="pb-3 text-right"></th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody
+                      className="divide-y divide-slate-100"
+                      aria-busy={isDashboardLoading}
+                    >
                       {isDashboardLoading ? (
-                        <tr>
-                          <td
-                            colSpan={7}
-                            className="py-8 text-center text-xs text-slate-400"
-                          >
-                            Loading incident reports...
-                          </td>
-                        </tr>
+                        <IncidentRowsSkeleton />
                       ) : !hasLoadedDashboardData ? (
                         <tr>
                           <td
@@ -971,8 +1193,11 @@ export default function Dashboard({ onNavigate }) {
                       <div
                         key={`loading-account-${index}`}
                         aria-hidden="true"
-                        className="h-[58px] animate-pulse rounded-xl bg-slate-100"
-                      />
+                        className="flex flex-col gap-2 rounded-xl border border-slate-100 bg-slate-50 p-3 animate-pulse"
+                      >
+                        <div className="h-3.5 w-1/3 rounded bg-slate-200" />
+                        <div className="h-3 w-3/4 rounded bg-slate-200" />
+                      </div>
                     ))
                   ) : !hasLoadedDashboardData ? (
                     <p className="py-4 text-center text-xs text-slate-400">
@@ -1054,81 +1279,116 @@ export default function Dashboard({ onNavigate }) {
                       News & announcements
                     </h2>
                     <p className="text-[11px] text-slate-400 font-medium">
-                      Latest published
+                      Newest first
                     </p>
                   </div>
                 </div>
-                {/* {hasLoadedDashboardData && announcements.length > 0 && (
-                  <span className="text-[10px] font-bold rounded-full bg-blue-100 text-blue-700">
-                    {announcements.length} published
+                {hasLoadedDashboardData && todayAlerts.length > 0 && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">
+                    {todayAlerts.length}{" "}
+                    {todayAlerts.length === 1 ? "alert" : "alerts"}
                   </span>
-                )} */}
+                )}
               </div>
 
-              {/* Shows one announcement at a time; scroll for the rest */}
+              {/* Shows one card at a time; scroll for the rest */}
               <div className="flex flex-col gap-4 max-h-[200px] overflow-y-auto snap-y snap-mandatory pr-1">
                 {isDashboardLoading ? (
-                  <div
-                    role="status"
-                    aria-label="Loading announcements"
-                    className="h-[180px] animate-pulse rounded-2xl bg-slate-200"
-                  />
+                  <AnnouncementSkeleton />
                 ) : !hasLoadedDashboardData ? (
                   <p className="py-8 text-center text-xs text-slate-400">
                     Unable to load announcements.
                   </p>
-                ) : announcements.length === 0 ? (
+                ) : feedItems.length === 0 ? (
                   <p className="py-8 text-center text-xs text-slate-400">
-                    No published announcements.
+                    No alerts or published announcements.
                   </p>
                 ) : (
-                  announcements.map((item, idx) => (
-                    <div
-                      key={item.id}
-                      onClick={() => go(ROUTES.news)}
-                      className={`relative overflow-hidden snap-start shrink-0 min-h-[180px] rounded-2xl p-5 flex flex-col justify-between text-white bg-gradient-to-br cursor-pointer hover:brightness-110 transition ${
-                        AD_STYLES[idx % AD_STYLES.length]
-                      } ${item.isNew ? "ring-2 ring-rose-400 ring-offset-2" : ""}`}
-                    >
-                      {item.imageUrl && (
-                        <>
-                          <img
-                            src={item.imageUrl}
-                            alt=""
-                            aria-hidden="true"
-                            loading="lazy"
-                            className="absolute inset-0 h-full w-full object-cover"
-                          />
+                  feedItems.map((item, idx) =>
+                    item.kind === "alert" ? (
+                      <div
+                        key={item.id}
+                        onClick={() => go(ROUTES.news)}
+                        className={`relative overflow-hidden snap-start shrink-0 min-h-[180px] rounded-2xl p-5 flex flex-col justify-between bg-gradient-to-br cursor-pointer hover:brightness-105 transition ${
+                          ALERT_STYLES[item.level].card
+                        } ${item.isNew ? "ring-2 ring-rose-400 ring-offset-2" : ""}`}
+                      >
+                        <div className="flex items-center justify-between">
                           <div
-                            aria-hidden="true"
-                            className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/35 to-slate-900/20"
-                          />
-                        </>
-                      )}
-                      <div className="relative z-10 flex items-center justify-between">
-                        <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
-                          <Megaphone className="w-4 h-4" />
+                            className={`w-9 h-9 rounded-xl flex items-center justify-center ${
+                              ALERT_STYLES[item.level].iconWrap
+                            }`}
+                          >
+                            <AlertCircle
+                              className={`w-4 h-4 ${item.isNew ? "animate-pulse" : ""}`}
+                            />
+                          </div>
+                          {item.isNew ? (
+                            <NewPill />
+                          ) : (
+                            <span
+                              className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                ALERT_STYLES[item.level].chip
+                              }`}
+                            >
+                              {item.time}
+                            </span>
+                          )}
                         </div>
-                        {item.isNew ? (
-                          <NewPill />
-                        ) : (
-                          <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full">
-                            {item.time}
-                          </span>
-                        )}
-                      </div>
 
-                      <div className="relative z-10 flex flex-col gap-1">
-                        <span className="text-base font-bold leading-snug">
-                          {item.title}
-                        </span>
-                        <span className="text-[11px] text-white/80 font-medium">
-                          {item.audience}
-                          {item.isNew ? ` • ${item.time}` : ""}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">
+                            {ALERT_STYLES[item.level].label}
+                          </span>
+                          <span className="text-base font-bold leading-snug">
+                            {item.title}
+                          </span>
+                          <span
+                            className={`text-[11px] font-medium ${
+                              ALERT_STYLES[item.level].sub
+                            }`}
+                          >
+                            {item.college}
+                            {item.isNew ? ` • ${item.time}` : ""}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    ) : (
+                      <div
+                        key={item.id}
+                        onClick={() => go(ROUTES.news)}
+                        className={`relative overflow-hidden snap-start shrink-0 min-h-[180px] rounded-2xl p-5 flex flex-col justify-between text-white bg-gradient-to-br cursor-pointer hover:brightness-110 transition ${
+                          AD_STYLES[idx % AD_STYLES.length]
+                        } ${item.isNew ? "ring-2 ring-rose-400 ring-offset-2" : ""}`}
+                      >
+                        {item.imageUrl && (
+                          <AnnouncementImage src={item.imageUrl} />
+                        )}
+                        <div className="relative z-10 flex items-center justify-between">
+                          <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
+                            <Megaphone className="w-4 h-4" />
+                          </div>
+                          {item.isNew ? (
+                            <NewPill />
+                          ) : (
+                            <span className="text-[10px] font-semibold bg-white/20 px-2 py-0.5 rounded-full">
+                              {item.time}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="relative z-10 flex flex-col gap-1">
+                          <span className="text-base font-bold leading-snug">
+                            {item.title}
+                          </span>
+                          <span className="text-[11px] text-white/80 font-medium">
+                            {item.audience}
+                            {item.isNew ? ` • ${item.time}` : ""}
+                          </span>
+                        </div>
+                      </div>
+                    ),
+                  )
                 )}
               </div>
             </aside>

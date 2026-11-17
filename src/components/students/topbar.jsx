@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { Bell, Megaphone, Shield } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  CheckCircle2,
+  Megaphone,
+  Shield,
+} from "lucide-react";
 
 export default function TopBar({
   title,
@@ -29,7 +35,7 @@ export default function TopBar({
           onClick={() => setIsNotificationsOpen((open) => !open)}
           aria-label={
             notificationItems.length > 0
-              ? `${notificationItems.length} new announcements`
+              ? `${notificationItems.length} new notifications`
               : "Notifications"
           }
           aria-expanded={isNotificationsOpen}
@@ -38,8 +44,8 @@ export default function TopBar({
         >
           <Bell className="w-5 h-5 text-slate-600" />
           {notificationItems.length > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-sm animate-pulse">
-              {notificationItems.length}
+            <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm animate-pulse">
+              {notificationItems.length > 99 ? "99+" : notificationItems.length}
             </span>
           )}
         </button>
@@ -56,51 +62,78 @@ export default function TopBar({
                 Notifications
               </h2>
               <p className="text-[11px] text-slate-500">
-                Announcements published today
+                New alerts, resolved reports, and announcements today
               </p>
             </div>
 
-            {notificationError ? (
-              <p role="alert" className="px-4 py-6 text-center text-xs text-rose-600">
+            {notificationError && (
+              <p
+                role="alert"
+                className="border-b border-rose-100 bg-rose-50 px-4 py-3 text-center text-xs text-rose-600"
+              >
                 {notificationError}
               </p>
-            ) : notificationItems.length === 0 ? (
+            )}
+            {notificationItems.length === 0 ? (
               <p className="px-4 py-6 text-center text-xs text-slate-400">
-                No new announcements today.
+                No new alerts, resolved reports, or announcements today.
               </p>
             ) : (
               <div className="max-h-80 overflow-y-auto">
-                {notificationItems.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setIsNotificationsOpen(false);
-                      onNotificationSelect?.(item);
-                    }}
-                    className="flex w-full items-start gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-slate-50"
-                  >
-                    {item.imageUrl ? (
-                      <img
-                        src={item.imageUrl}
-                        alt=""
-                        aria-hidden="true"
-                        className="h-10 w-10 shrink-0 rounded-lg object-cover"
-                      />
-                    ) : (
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                        <Megaphone className="h-4 w-4" />
+                {notificationItems.map((item) => {
+                  const Icon =
+                    item.kind === "alert"
+                      ? AlertTriangle
+                      : item.kind === "report"
+                        ? CheckCircle2
+                        : Megaphone;
+                  const iconStyle =
+                    item.kind === "alert"
+                      ? "bg-amber-50 text-amber-600"
+                      : item.kind === "report"
+                        ? "bg-emerald-50 text-emerald-600"
+                        : "bg-blue-50 text-blue-600";
+
+                  return (
+                    <button
+                      key={item.key || `${item.kind || "announcement"}-${item.id}`}
+                      type="button"
+                      onClick={() => {
+                        setIsNotificationsOpen(false);
+                        onNotificationSelect?.(item);
+                      }}
+                      className="flex w-full items-start gap-3 border-b border-slate-100 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-slate-50"
+                    >
+                      {item.kind === "announcement" && item.imageUrl ? (
+                        <img
+                          src={item.imageUrl}
+                          alt=""
+                          aria-hidden="true"
+                          className="h-10 w-10 shrink-0 rounded-lg object-cover"
+                        />
+                      ) : (
+                        <span
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${iconStyle}`}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </span>
+                      )}
+                      <span className="flex min-w-0 flex-col gap-1">
+                        <span className="text-xs font-semibold text-slate-900">
+                          {item.title}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          {item.type} · {item.published}
+                        </span>
+                        {item.message && (
+                          <span className="line-clamp-2 text-[10px] leading-relaxed text-slate-500">
+                            {item.message}
+                          </span>
+                        )}
                       </span>
-                    )}
-                    <span className="flex min-w-0 flex-col gap-1">
-                      <span className="text-xs font-semibold text-slate-900">
-                        {item.title}
-                      </span>
-                      <span className="text-[10px] text-slate-500">
-                        {item.type} · {item.published}
-                      </span>
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>

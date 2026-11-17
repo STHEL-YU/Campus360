@@ -11,7 +11,7 @@ import {
 import { getStudentProfile } from "../../auth";
 import { useLocation, useNavigate } from "react-router-dom";
 import ReportsList from "./studreportlist.jsx";
-
+import map from "../../assets/map.png";
 const USE_DUMMY_MAP = true;
 
 const DUMMY_MAP_SVG = `
@@ -686,7 +686,7 @@ export default function ReportIncident() {
             >
               {!mapError && (
                 <img
-                  src={MAP_SRC}
+                  src={map}
                   alt="Campus map"
                   draggable={false}
                   onError={() => setMapError(true)}

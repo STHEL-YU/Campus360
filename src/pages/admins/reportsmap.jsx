@@ -16,7 +16,7 @@ import {
   Tag,
   Hash,
 } from "lucide-react";
-
+import map from "../../assets/map.png";
 // Set to false to use your real map at /campus-map.png
 const USE_DUMMY_MAP = true;
 
@@ -475,7 +475,7 @@ export default function CampusMonitoring() {
             >
               {!mapError && (
                 <img
-                  src={MAP_SRC}
+                  src={map}
                   alt="Campus map"
                   draggable={false}
                   onError={() => setMapError(true)}

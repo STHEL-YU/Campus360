@@ -144,7 +144,8 @@ const buildMonthCells = (year, month) => {
 
 async function requestDashboardData(signal) {
   const headers = { "X-Campus360-Admin": "1" };
-  const [usersResponse, announcementsResponse] = await Promise.all([
+  const [usersResponse, announcementsResponse, reportsResponse] =
+    await Promise.all([
     fetch("/api/student/admin-students", {
       credentials: "same-origin",
       headers,
@@ -155,10 +156,16 @@ async function requestDashboardData(signal) {
       headers,
       signal,
     }),
-  ]);
-  const [usersResult, announcementsResult] = await Promise.all([
+      fetch("/api/student/admin-reports", {
+        credentials: "same-origin",
+        headers,
+        signal,
+      }),
+    ]);
+  const [usersResult, announcementsResult, reportsResult] = await Promise.all([
     usersResponse.json(),
     announcementsResponse.json(),
+    reportsResponse.json(),
   ]);
 
   if (!usersResponse.ok) {
@@ -169,9 +176,13 @@ async function requestDashboardData(signal) {
       announcementsResult.error || "Unable to load news and announcements.",
     );
   }
+  if (!reportsResponse.ok) {
+    throw new Error(reportsResult.error || "Unable to load incident reports.");
+  }
   if (
     !Array.isArray(usersResult.users) ||
-    !Array.isArray(announcementsResult.announcements)
+    !Array.isArray(announcementsResult.announcements) ||
+    !Array.isArray(reportsResult.reports)
   ) {
     throw new Error("The server returned invalid dashboard data.");
   }
@@ -179,6 +190,48 @@ async function requestDashboardData(signal) {
   return {
     users: usersResult.users,
     announcements: announcementsResult.announcements,
+    reports: reportsResult.reports,
+  };
+}
+
+function mapDashboardIncident(report) {
+  const rawStatus = String(report.status || "").toLowerCase();
+  const status =
+    rawStatus === "resolved"
+      ? "Resolved"
+      : rawStatus === "declined" || rawStatus === "rejected"
+        ? "Declined"
+        : rawStatus === "pending" ||
+            rawStatus === "active" ||
+            rawStatus === "in review"
+          ? "Pending"
+          : "New";
+  const statusColor =
+    status === "Resolved"
+      ? "bg-emerald-100 text-emerald-700"
+      : status === "Pending"
+        ? "bg-amber-100 text-amber-700"
+        : status === "Declined"
+          ? "bg-slate-100 text-slate-600"
+          : "bg-rose-100 text-rose-700";
+  const submittedAt = new Date(report.submittedAt);
+
+  return {
+    id: report.reportNumber || `REP-${report.id}`,
+    category: report.category || "Incident report",
+    location: [report.building, report.location].filter(Boolean).join(" · ") ||
+      "Location not provided",
+    time: Number.isNaN(submittedAt.getTime())
+      ? "Time unavailable"
+      : submittedAt.toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+    status,
+    statusColor,
+    isNew: status === "New",
+    reporter: report.anonymous ? "Anonymous" : "Student reporter",
+    reportedAt: submittedAt.getTime(),
   };
 }
 
@@ -206,47 +259,13 @@ export default function Dashboard({ onNavigate }) {
     return { year: d.getFullYear(), month: d.getMonth() };
   });
 
-  const [incidents, setIncidents] = useState([
-    {
-      id: "C360-241014-083",
-      reporter: "Alexandra Reyes",
-      category: "Unauthorized Entry",
-      location: "Engineering B",
-      time: "10:26 AM",
-      status: "New",
-      statusColor: "bg-rose-100 text-rose-700",
-      isNew: false,
-    },
-    {
-      id: "C360-241014-082",
-      reporter: "James Villanueva",
-      category: "Suspicious Person",
-      location: "University Library",
-      time: "9:48 AM",
-      status: "Under review",
-      statusColor: "bg-amber-100 text-amber-700",
-      isNew: false,
-    },
-    {
-      id: "C360-241014-079",
-      reporter: "Faculty reporter",
-      category: "Medical Emergency",
-      location: "Science Hall",
-      time: "8:15 AM",
-      status: "Responding",
-      statusColor: "bg-blue-100 text-blue-700",
-      isNew: false,
-    },
-  ]);
+  const [incidents, setIncidents] = useState([]);
  
   const [announcements, setAnnouncements] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [isDashboardLoading, setIsDashboardLoading] = useState(true);
   const [hasLoadedDashboardData, setHasLoadedDashboardData] = useState(false);
   const [dashboardDataError, setDashboardDataError] = useState("");
-
-  // Counters for the metric cards
-  const [addedIncidents, setAddedIncidents] = useState(0);
 
   // Toasts + sound
   const [toasts, setToasts] = useState([]);
@@ -264,6 +283,7 @@ export default function Dashboard({ onNavigate }) {
       refreshInFlight = true;
       try {
         const result = await requestDashboardData(controller.signal);
+        setIncidents(result.reports.map(mapDashboardIncident));
         setAccounts(
           result.users.map((user) => ({
             id: user.id,
@@ -418,7 +438,6 @@ export default function Dashboard({ onNavigate }) {
     };
 
     setIncidents((prev) => [incident, ...prev]);
-    setAddedIncidents((c) => c + 1);
     expireNew(setIncidents, incident.id);
     pushToast("incident", `${incident.category} at ${incident.location}`);
     playSound("incident");
@@ -472,6 +491,7 @@ export default function Dashboard({ onNavigate }) {
   );
 
   const newCount = (items) => items.filter((i) => i.isNew).length;
+  const newIncidents = incidents.filter((incident) => incident.status === "New");
 
   // Calendar
   const calCells = buildMonthCells(calView.year, calView.month);
@@ -511,6 +531,24 @@ export default function Dashboard({ onNavigate }) {
   ) : (
     "—"
   );
+  const incidentCount = isDashboardLoading ? (
+    <span className="block h-7 w-16 animate-pulse rounded bg-slate-200" />
+  ) : hasLoadedDashboardData ? (
+    incidents.length.toLocaleString()
+  ) : (
+    "—"
+  );
+  const incidentsThisWeek = incidents.filter(
+    (incident) =>
+      Number.isFinite(incident.reportedAt) &&
+      incident.reportedAt >= now.getTime() - 7 * 24 * 60 * 60 * 1000,
+  ).length;
+  const resolvedIncidentCount = incidents.filter(
+    (incident) => incident.status === "Resolved",
+  ).length;
+  const resolutionRate = incidents.length
+    ? ((resolvedIncidentCount / incidents.length) * 100).toFixed(1)
+    : "0.0";
 
   return (
     <main className="flex-1 flex flex-col h-screen overflow-y-auto bg-slate-100 select-none">
@@ -681,10 +719,12 @@ export default function Dashboard({ onNavigate }) {
                 </div>
                 <div>
                   <div className="text-2xl font-bold text-slate-900">
-                    {248 + addedIncidents}
+                    {incidentCount}
                   </div>
                   <div className="text-[11px] text-purple-600 font-medium mt-1">
-                    +{7 + addedIncidents} this week
+                    {isDashboardLoading
+                      ? "Loading reports..."
+                      : `${incidentsThisWeek} this week`}
                   </div>
                 </div>
               </div>
@@ -714,9 +754,15 @@ export default function Dashboard({ onNavigate }) {
                   </div>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-slate-900">231</div>
+                  <div className="text-2xl font-bold text-slate-900">
+                    {isDashboardLoading
+                      ? "—"
+                      : hasLoadedDashboardData
+                        ? resolvedIncidentCount.toLocaleString()
+                        : "—"}
+                  </div>
                   <div className="text-[11px] text-slate-400 font-medium mt-1">
-                    93.1% resolution rate
+                    {resolutionRate}% resolution rate
                   </div>
                 </div>
               </div>
@@ -778,7 +824,35 @@ export default function Dashboard({ onNavigate }) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {incidents.slice(0, 5).map((incident) => (
+                      {isDashboardLoading ? (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="py-8 text-center text-xs text-slate-400"
+                          >
+                            Loading incident reports...
+                          </td>
+                        </tr>
+                      ) : !hasLoadedDashboardData ? (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="py-8 text-center text-xs text-rose-600"
+                          >
+                            {dashboardDataError ||
+                              "Incident reports could not be loaded."}
+                          </td>
+                        </tr>
+                      ) : newIncidents.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="py-8 text-center text-xs text-slate-400"
+                          >
+                            No new incident reports need review.
+                          </td>
+                        </tr>
+                      ) : newIncidents.slice(0, 5).map((incident) => (
                         <tr
                           key={incident.id}
                           onClick={() => go(ROUTES.reports)}

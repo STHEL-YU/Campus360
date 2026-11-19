@@ -26,8 +26,8 @@ const pool = new Pool({
 });
 
 const DEVICE_API_KEY = process.env.DEVICE_API_KEY || "";
+const CROSS_COLLEGE_ALERT_TITLE = "RED ALERT: MOVE TO SAFETY";
 
-// The device clock is only trusted if it is this close to the server clock
 const MAX_CLOCK_DRIFT_MS = 10 * 60 * 1000;
 
 function isValidDeviceKey(provided) {
@@ -37,8 +37,6 @@ function isValidDeviceKey(provided) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// Use the device time only when it matches the server time; otherwise use the
-// server's created_at so a wrong device clock can't show a wrong date.
 function resolveAlertTime(alertTime, createdAt) {
   const created = new Date(createdAt);
   const device = alertTime ? new Date(alertTime) : null;
@@ -89,8 +87,6 @@ async function handleIngest(req, res) {
   }
 
   try {
-    // Device time is kept only if within 10 minutes of the server time;
-    // no alertTime, or a wrong device clock -> use server time
     const result = await pool.query(
       `INSERT INTO alerts (title, message, college, alert_time)
        VALUES (
@@ -267,10 +263,18 @@ async function handleStudentLatest(req, res) {
     const result = await pool.query(
       `SELECT id, title, message, college, alert_time, created_at
        FROM alerts
-       WHERE college = $1
+       WHERE (BTRIM(REGEXP_REPLACE(
+               REGEXP_REPLACE(LOWER(college), '[[:space:]]*&[[:space:]]*', ' and ', 'g'),
+               '[[:space:]]+', ' ', 'g'
+             )) = BTRIM(REGEXP_REPLACE(
+               REGEXP_REPLACE(LOWER($1), '[[:space:]]*&[[:space:]]*', ' and ', 'g'),
+               '[[:space:]]+', ' ', 'g'
+             ))
+          OR UPPER(BTRIM(title)) = UPPER($2)
+       )
          AND created_at >= NOW() - INTERVAL '7 days'
        ORDER BY created_at DESC, id DESC`,
-      [student.college],
+      [student.college, CROSS_COLLEGE_ALERT_TITLE],
     );
 
     res.setHeader("Cache-Control", "private, no-store");
